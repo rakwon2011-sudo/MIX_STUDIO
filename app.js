@@ -45,6 +45,14 @@
   function showProgress(msg) { progressText.textContent = msg; progressOverlay.classList.remove('hidden'); }
   function hideProgress() { progressOverlay.classList.add('hidden'); }
 
+  // m:ss.d 형식으로 시간을 표시 (파형 위 마우스 커서 툴팁용)
+  function formatTime(sec) {
+    if (!isFinite(sec) || sec < 0) sec = 0;
+    const m = Math.floor(sec / 60);
+    const s = (sec % 60).toFixed(1).padStart(4, '0');
+    return `${m}:${s}`;
+  }
+
   function getAudioCtx() {
     if (!state.audioCtx) {
       state.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -282,6 +290,30 @@
     const dimLeft = row.querySelector('.region-dim-left');
     const dimRight = row.querySelector('.region-dim-right');
     const wrap = row.querySelector('.waveform-wrap');
+
+    // 마우스를 파형 위에 올리면 세로선 커서 + 시간 표시가 따라다님
+    const waveCursor = document.createElement('div');
+    waveCursor.className = 'wave-cursor';
+    const waveCursorLabel = document.createElement('div');
+    waveCursorLabel.className = 'wave-cursor-time';
+    wrap.appendChild(waveCursor);
+    wrap.appendChild(waveCursorLabel);
+
+    wrap.addEventListener('mousemove', (e) => {
+      const rect = wrap.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      if (x < 0 || x > rect.width) return;
+      const t = (x / rect.width) * track.buffer.duration;
+      waveCursor.style.left = x + 'px';
+      waveCursor.style.display = 'block';
+      waveCursorLabel.style.left = x + 'px';
+      waveCursorLabel.textContent = formatTime(t);
+      waveCursorLabel.style.display = 'block';
+    });
+    wrap.addEventListener('mouseleave', () => {
+      waveCursor.style.display = 'none';
+      waveCursorLabel.style.display = 'none';
+    });
 
     function positionHandles() {
       const width = wrap.clientWidth;
@@ -623,6 +655,36 @@
     return `hsl(${hue}, 62%, 55%)`;
   }
 
+  // 타임라인 위에 마우스를 올리면 세로선 커서 + 시간 표시가 따라다님.
+  // renderTimeline()이 innerHTML을 매번 비우므로, 커서 엘리먼트는 렌더링 끝에서
+  // 다시 붙여주고, 이벤트 리스너는 컨테이너(고정 DOM 노드)에 한 번만 건다.
+  const timelineCursor = document.createElement('div');
+  timelineCursor.className = 'timeline-cursor';
+  const timelineCursorLabel = document.createElement('div');
+  timelineCursorLabel.className = 'timeline-cursor-label';
+
+  function hideTimelineCursor() {
+    timelineCursor.style.display = 'none';
+    timelineCursorLabel.style.display = 'none';
+  }
+
+  if (timelineTrackEl) {
+    timelineTrackEl.addEventListener('mousemove', (e) => {
+      const { items } = computeTimeline();
+      if (items.length === 0) return;
+      const rect = timelineTrackEl.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      if (x < 0 || x > rect.width) { hideTimelineCursor(); return; }
+      const t = x / PX_PER_SEC;
+      timelineCursor.style.left = x + 'px';
+      timelineCursor.style.display = 'block';
+      timelineCursorLabel.style.left = x + 'px';
+      timelineCursorLabel.textContent = formatTime(t);
+      timelineCursorLabel.style.display = 'block';
+    });
+    timelineTrackEl.addEventListener('mouseleave', hideTimelineCursor);
+  }
+
   function renderTimeline() {
     if (!timelineTrackEl) return;
     timelineTrackEl.innerHTML = '';
@@ -672,6 +734,9 @@
         makeCrossfadeHandleDraggable(handle, item.track, item, nextItem);
       }
     });
+
+    timelineTrackEl.appendChild(timelineCursor);
+    timelineTrackEl.appendChild(timelineCursorLabel);
   }
 
   function makeClipDraggable(clip, track) {
