@@ -488,6 +488,33 @@ main {
   padding-bottom: 4px;
 }
 
+/* 확대했을 때 화면 밖으로 밀려난 부분을, 트랙패드 없이도 마우스로 직접 잡고 끌 수 있도록
+   이동 막대(스크롤바)를 항상 눈에 보이게 굵게 표시한다 — 타임라인과 각 곡 파형 둘 다 적용. */
+.timeline-scroll,
+.waveform-wrap {
+  scrollbar-width: thin; /* Firefox */
+  scrollbar-color: var(--accent-2) rgba(255, 255, 255, 0.08);
+}
+.timeline-scroll::-webkit-scrollbar,
+.waveform-wrap::-webkit-scrollbar {
+  height: 10px;
+}
+.timeline-scroll::-webkit-scrollbar-track,
+.waveform-wrap::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+}
+.timeline-scroll::-webkit-scrollbar-thumb,
+.waveform-wrap::-webkit-scrollbar-thumb {
+  background: var(--accent-2);
+  border-radius: 6px;
+  border: 2px solid rgba(0, 0, 0, 0.15);
+}
+.timeline-scroll::-webkit-scrollbar-thumb:hover,
+.waveform-wrap::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+
 .timeline-track {
   position: relative;
   height: 60px;
