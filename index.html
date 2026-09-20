@@ -59,7 +59,13 @@
     </section>
 
     <section class="timeline-section">
-      <h2>타임라인</h2>
+      <div class="timeline-header">
+        <h2>타임라인</h2>
+        <div class="timeline-transport">
+          <button id="timelinePlayBtn" class="btn" disabled>▶ 미리듣기</button>
+          <button id="timelineStopBtn" class="btn" disabled>■ 정지</button>
+        </div>
+      </div>
       <p class="hint">곡 블록을 좌우로 드래그하면 순서가 바뀌고, 블록 사이의 ↔ 손잡이를 드래그하면 크로스페이드(겹침)가 조정됩니다. 구간 자르기·비트 스냅·볼륨 같은 세부 편집은 아래 목록에서 합니다.</p>
       <div class="timeline-scroll">
         <div class="timeline-track" id="timelineTrack"></div>

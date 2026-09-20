@@ -37,6 +37,8 @@
   const pasteEndBtn = document.getElementById('pasteEndBtn');
   const exportProjectBtn = document.getElementById('exportProjectBtn');
   const importProjectInput = document.getElementById('importProjectInput');
+  const timelinePlayBtn = document.getElementById('timelinePlayBtn');
+  const timelineStopBtn = document.getElementById('timelineStopBtn');
   const PX_PER_SEC = 40;
 
   function setStatus(msg) { statusEl.textContent = msg || ''; }
@@ -54,6 +56,7 @@
     emptyState.style.display = state.tracks.length === 0 ? 'block' : 'none';
     const hasTracks = state.tracks.length > 0;
     playBtn.disabled = !hasTracks;
+    timelinePlayBtn.disabled = !hasTracks;
     exportBtn.disabled = !hasTracks;
     exportProjectBtn.disabled = !hasTracks;
   }
@@ -559,6 +562,39 @@
     ctx2d.stroke();
   }
 
+  // Draws only the trimmed [startSec, endSec) region of a buffer, scaled to
+  // fill the canvas — used for the small waveform drawn inside each timeline clip.
+  function drawWaveformRegion(canvas, buffer, startSec, endSec) {
+    const ctx2d = canvas.getContext('2d');
+    const width = canvas.width;
+    const height = canvas.height;
+    ctx2d.clearRect(0, 0, width, height);
+    if (width <= 0) return;
+    const data = buffer.getChannelData(0);
+    const sr = buffer.sampleRate;
+    const startSample = Math.max(0, Math.floor(startSec * sr));
+    const endSample = Math.min(data.length, Math.ceil(endSec * sr));
+    const span = Math.max(1, endSample - startSample);
+    const step = Math.max(1, Math.ceil(span / width));
+    ctx2d.strokeStyle = 'rgba(7, 16, 24, 0.75)';
+    ctx2d.beginPath();
+    for (let x = 0; x < width; x++) {
+      let min = 1.0, max = -1.0;
+      const s = startSample + x * step;
+      for (let i = 0; i < step && s + i < endSample; i++) {
+        const v = data[s + i];
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+      if (min > max) { min = 0; max = 0; }
+      const y1 = ((1 + min) / 2) * height;
+      const y2 = ((1 + max) / 2) * height;
+      ctx2d.moveTo(x, y1);
+      ctx2d.lineTo(x, y2);
+    }
+    ctx2d.stroke();
+  }
+
   // ---------- Timeline computation ----------
   function computeTimeline() {
     let cursor = 0;
@@ -609,7 +645,20 @@
       clip.style.left = (item.timelineStart * PX_PER_SEC) + 'px';
       clip.style.width = Math.max(item.clipDuration * PX_PER_SEC, 4) + 'px';
       clip.style.background = trackColor(item.track.id);
-      clip.textContent = `${item.track.name} (${item.clipDuration.toFixed(1)}s)`;
+
+      const clipWidthPx = Math.max(Math.round(item.clipDuration * PX_PER_SEC), 4);
+      const waveCanvas = document.createElement('canvas');
+      waveCanvas.className = 'timeline-clip-wave';
+      waveCanvas.width = clipWidthPx;
+      waveCanvas.height = 52;
+      clip.appendChild(waveCanvas);
+      drawWaveformRegion(waveCanvas, item.track.buffer, item.track.start, item.track.end);
+
+      const label = document.createElement('span');
+      label.className = 'timeline-clip-label';
+      label.textContent = `${item.track.name} (${item.clipDuration.toFixed(1)}s)`;
+      clip.appendChild(label);
+
       timelineTrackEl.appendChild(clip);
       makeClipDraggable(clip, item.track);
 
@@ -736,7 +785,7 @@
   }
 
   // ---------- Preview playback ----------
-  playBtn.addEventListener('click', async () => {
+  async function playMix() {
     const ctx = getAudioCtx();
     await ctx.resume();
     stopPreview();
@@ -756,25 +805,34 @@
     }
 
     playBtn.disabled = true;
+    timelinePlayBtn.disabled = true;
     stopBtn.disabled = false;
+    timelineStopBtn.disabled = false;
     setStatus(`재생 중... 총 ${totalDuration.toFixed(1)}초`);
 
     const endTimer = setTimeout(() => {
       playBtn.disabled = false;
+      timelinePlayBtn.disabled = false;
       stopBtn.disabled = true;
+      timelineStopBtn.disabled = true;
       setStatus('재생 완료');
     }, totalDuration * 1000 + 200);
     state.activeSources.push({ stop: () => clearTimeout(endTimer) });
-  });
+  }
 
+  playBtn.addEventListener('click', playMix);
+  timelinePlayBtn.addEventListener('click', playMix);
   stopBtn.addEventListener('click', stopPreview);
+  timelineStopBtn.addEventListener('click', stopPreview);
 
   function stopPreview() {
     state.activeSources.forEach(s => { try { s.stop(); } catch (e) {} });
     state.activeSources = [];
     videoPreview.pause();
     playBtn.disabled = state.tracks.length === 0;
+    timelinePlayBtn.disabled = state.tracks.length === 0;
     stopBtn.disabled = true;
+    timelineStopBtn.disabled = true;
     setStatus('정지됨');
   }
 
