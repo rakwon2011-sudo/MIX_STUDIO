@@ -305,25 +305,33 @@
     const dimLeft = row.querySelector('.region-dim-left');
     const dimRight = row.querySelector('.region-dim-right');
     const wrap = row.querySelector('.waveform-wrap');
+    // 파형/핸들이 실제로 놓이는 공간. 확대(+)하면 wrap보다 넓어지고, wrap이 가로 스크롤되는
+    // "뷰포트" 역할을 한다 — 모든 좌표 계산은 wrap이 아니라 inner를 기준으로 한다.
+    const inner = row.querySelector('.waveform-inner');
+    const rowZoomIn = row.querySelector('.row-zoom-in');
+    const rowZoomOut = row.querySelector('.row-zoom-out');
+    const rowZoomLevel = row.querySelector('.row-zoom-level');
+    const ROW_ZOOM_MIN = 1;
+    const ROW_ZOOM_MAX = 20;
 
     // 마우스를 파형 위에 올리면 세로선 커서 + 시간 표시가 따라다님
     const waveCursor = document.createElement('div');
     waveCursor.className = 'wave-cursor';
     const waveCursorLabel = document.createElement('div');
     waveCursorLabel.className = 'wave-cursor-time';
-    wrap.appendChild(waveCursor);
-    wrap.appendChild(waveCursorLabel);
+    inner.appendChild(waveCursor);
+    inner.appendChild(waveCursorLabel);
 
     // 이 곡이 재생될 때 이미 재생된 구간을 그림자로 채우고, 현재 위치에 선을 그어준다
     const waveProgress = document.createElement('div');
     waveProgress.className = 'wave-progress';
-    wrap.appendChild(waveProgress);
+    inner.appendChild(waveProgress);
     const wavePlayhead = document.createElement('div');
     wavePlayhead.className = 'wave-playhead';
-    wrap.appendChild(wavePlayhead);
+    inner.appendChild(wavePlayhead);
 
-    wrap.addEventListener('mousemove', (e) => {
-      const rect = wrap.getBoundingClientRect();
+    inner.addEventListener('mousemove', (e) => {
+      const rect = inner.getBoundingClientRect();
       const x = e.clientX - rect.left;
       if (x < 0 || x > rect.width) return;
       const t = (x / rect.width) * track.buffer.duration;
@@ -333,7 +341,7 @@
       waveCursorLabel.textContent = formatTime(t);
       waveCursorLabel.style.display = 'block';
     });
-    wrap.addEventListener('mouseleave', () => {
+    inner.addEventListener('mouseleave', () => {
       waveCursor.style.display = 'none';
       waveCursorLabel.style.display = 'none';
     });
@@ -342,16 +350,16 @@
     [handleStart, handleEnd].forEach((h) => {
       h.addEventListener('click', (e) => e.stopPropagation());
     });
-    wrap.addEventListener('click', (e) => {
+    inner.addEventListener('click', (e) => {
       if (e.target === handleStart || e.target === handleEnd) return;
-      const rect = wrap.getBoundingClientRect();
+      const rect = inner.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const t = (x / rect.width) * track.buffer.duration;
       playFromOffset(track, t);
     });
 
     function positionHandles() {
-      const width = wrap.clientWidth;
+      const width = inner.clientWidth;
       const dur = track.buffer.duration;
       const xStart = (track.start / dur) * width;
       const xEnd = (track.end / dur) * width;
@@ -362,6 +370,29 @@
       dimRight.style.left = xEnd + 'px';
       dimRight.style.width = (width - xEnd) + 'px';
     }
+
+    // 파형을 더 세밀하게 보고 싶을 때(+) 안쪽 내용을 넓혀서 픽셀당 오디오 길이를 줄이고,
+    // wrap이 그 넓어진 내용을 가로 스크롤로 보여준다. (-)를 누르면 다시 원래 폭으로.
+    track.zoom = track.zoom || 1;
+    function applyZoom() {
+      const baseWidth = wrap.clientWidth;
+      const contentWidth = Math.max(baseWidth, Math.round(baseWidth * track.zoom));
+      inner.style.width = contentWidth + 'px';
+      canvas.width = contentWidth;
+      drawWaveform(canvas, track.buffer);
+      positionHandles();
+      if (rowZoomLevel) rowZoomLevel.textContent = Math.round(track.zoom * 100) + '%';
+      if (rowZoomOut) rowZoomOut.disabled = track.zoom <= ROW_ZOOM_MIN;
+      if (rowZoomIn) rowZoomIn.disabled = track.zoom >= ROW_ZOOM_MAX;
+    }
+    if (rowZoomIn) rowZoomIn.addEventListener('click', () => {
+      track.zoom = Math.min(ROW_ZOOM_MAX, track.zoom * 1.6);
+      applyZoom();
+    });
+    if (rowZoomOut) rowZoomOut.addEventListener('click', () => {
+      track.zoom = Math.max(ROW_ZOOM_MIN, track.zoom / 1.6);
+      applyZoom();
+    });
 
     function setStart(val) {
       val = Math.max(0, Math.min(val, track.end - 0.05));
@@ -408,7 +439,7 @@
         e.preventDefault();
         handle.setPointerCapture(e.pointerId);
         const onMove = (ev) => {
-          const rect = wrap.getBoundingClientRect();
+          const rect = inner.getBoundingClientRect();
           const x = Math.max(0, Math.min(rect.width, ev.clientX - rect.left));
           const t = (x / rect.width) * track.buffer.duration;
           if (isStart) setStart(t); else setEnd(t);
@@ -464,8 +495,8 @@
     });
 
     trackList.appendChild(row);
-    requestAnimationFrame(positionHandles);
-    window.addEventListener('resize', positionHandles);
+    requestAnimationFrame(applyZoom);
+    window.addEventListener('resize', applyZoom);
 
     renumberTracks();
   }

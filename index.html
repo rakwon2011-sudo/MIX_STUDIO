@@ -102,14 +102,21 @@
         <button class="btn-paste" title="복사해둔 구간을 이 곡 바로 뒤에 붙여넣기" disabled>붙여넣기</button>
         <input type="text" class="track-name" title="클릭해서 제목 수정">
         <span class="track-bpm">BPM 분석 중...</span>
+        <div class="zoom-controls row-zoom-controls" title="파형 확대/축소">
+          <button class="btn btn-zoom row-zoom-out" type="button">－</button>
+          <span class="zoom-level row-zoom-level">100%</span>
+          <button class="btn btn-zoom row-zoom-in" type="button">＋</button>
+        </div>
         <button class="btn-remove" title="삭제">✕</button>
       </div>
       <div class="waveform-wrap">
-        <canvas class="waveform" width="1000" height="90"></canvas>
-        <div class="handle handle-start" title="드래그해서 시작점 조정"></div>
-        <div class="handle handle-end" title="드래그해서 끝점 조정"></div>
-        <div class="region-dim region-dim-left"></div>
-        <div class="region-dim region-dim-right"></div>
+        <div class="waveform-inner">
+          <canvas class="waveform" width="1000" height="90"></canvas>
+          <div class="handle handle-start" title="드래그해서 시작점 조정"></div>
+          <div class="handle handle-end" title="드래그해서 끝점 조정"></div>
+          <div class="region-dim region-dim-left"></div>
+          <div class="region-dim region-dim-right"></div>
+        </div>
       </div>
       <div class="track-controls">
         <label>시작 <input type="number" class="in-start" step="0.01" min="0"> 초
