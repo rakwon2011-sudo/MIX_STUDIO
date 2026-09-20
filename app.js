@@ -315,6 +315,18 @@
       waveCursorLabel.style.display = 'none';
     });
 
+    // 파형 위 아무 지점이나 클릭하면 그 지점부터 바로 들어볼 수 있음 (핸들 드래그는 제외)
+    [handleStart, handleEnd].forEach((h) => {
+      h.addEventListener('click', (e) => e.stopPropagation());
+    });
+    wrap.addEventListener('click', (e) => {
+      if (e.target === handleStart || e.target === handleEnd) return;
+      const rect = wrap.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const t = (x / rect.width) * track.buffer.duration;
+      playFromOffset(track, t);
+    });
+
     function positionHandles() {
       const width = wrap.clientWidth;
       const dur = track.buffer.duration;
@@ -439,22 +451,7 @@
         stopTrackPreview();
         return;
       }
-      const ctx = getAudioCtx();
-      await ctx.resume();
-      stopPreview();
-      stopTrackPreview();
-      const clipDuration = track.end - track.start;
-      const item = { track, clipDuration };
-      const src = scheduleTrack(ctx, ctx.destination, item, ctx.currentTime + 0.05);
-      state.trackPreviewSource = src;
-      state.trackPreviewBtn = playTrackBtn;
-      playTrackBtn.textContent = '■';
-      playTrackBtn.classList.add('playing');
-      setStatus(`${track.name} 미리듣기 중...`);
-      const endTimer = setTimeout(() => {
-        if (state.trackPreviewBtn === playTrackBtn) stopTrackPreview();
-      }, clipDuration * 1000 + 150);
-      src._endTimer = endTimer;
+      await playFromOffset(track, track.start);
     });
 
     trackList.appendChild(row);
@@ -745,6 +742,8 @@
       clip.setPointerCapture(e.pointerId);
       clip.classList.add('dragging');
       const startClientX = e.clientX;
+      const clipRect = clip.getBoundingClientRect();
+      const clickOffsetX = e.clientX - clipRect.left;
       const snapshot = computeTimeline().items;
       let moved = false;
 
@@ -776,6 +775,10 @@
           }
           renderTimeline();
         } else {
+          // 드래그 없이 클릭만 한 경우: 클릭한 지점부터 바로 재생 + 해당 트랙 행 강조
+          const ratio = clipRect.width > 0 ? clickOffsetX / clipRect.width : 0;
+          const fromTime = track.start + ratio * (track.end - track.start);
+          playFromOffset(track, fromTime);
           highlightTrackRow(track.id);
         }
       };
@@ -912,6 +915,36 @@
       state.trackPreviewBtn.classList.remove('playing');
       state.trackPreviewBtn = null;
     }
+  }
+
+  // 파형(트랙 편집 목록 + 타임라인) 아무 지점을 클릭했을 때 그 지점부터 재생.
+  // fromTime이 트랙의 시작점(start)보다 뒤라면 "가운데부터 스크럽"으로 보고 페이드인은 생략.
+  async function playFromOffset(track, fromTime) {
+    const btn = trackList.querySelector(`[data-id="${track.id}"] .btn-play-track`);
+    const ctx = getAudioCtx();
+    await ctx.resume();
+    stopPreview();
+    stopTrackPreview();
+    const startAt = Math.min(Math.max(fromTime, track.start), track.end - 0.05);
+    const isSeek = startAt > track.start + 0.01;
+    const clipDuration = track.end - startAt;
+    const seeked = Object.assign({}, track, {
+      start: startAt,
+      fadeIn: isSeek ? 0 : track.fadeIn,
+    });
+    const item = { track: seeked, clipDuration };
+    const src = scheduleTrack(ctx, ctx.destination, item, ctx.currentTime + 0.05);
+    state.trackPreviewSource = src;
+    state.trackPreviewBtn = btn;
+    if (btn) {
+      btn.textContent = '■';
+      btn.classList.add('playing');
+    }
+    setStatus(`${track.name} 미리듣기 중... (${formatTime(startAt)}부터)`);
+    const endTimer = setTimeout(() => {
+      if (state.trackPreviewBtn === btn) stopTrackPreview();
+    }, clipDuration * 1000 + 150);
+    src._endTimer = endTimer;
   }
 
   // ---------- Export to WAV ----------
