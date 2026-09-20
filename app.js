@@ -299,6 +299,11 @@
     wrap.appendChild(waveCursor);
     wrap.appendChild(waveCursorLabel);
 
+    // 이 곡이 재생될 때 실제 재생 위치를 보여주는 선 (미리듣기 진행 상황 표시용)
+    const wavePlayhead = document.createElement('div');
+    wavePlayhead.className = 'wave-playhead';
+    wrap.appendChild(wavePlayhead);
+
     wrap.addEventListener('mousemove', (e) => {
       const rect = wrap.getBoundingClientRect();
       const x = e.clientX - rect.left;
@@ -660,6 +665,10 @@
   const timelineCursorLabel = document.createElement('div');
   timelineCursorLabel.className = 'timeline-cursor-label';
 
+  // 재생 중 실제로 어디까지 진행됐는지 보여주는 선 (전체 타임라인을 가로지름)
+  const timelinePlayhead = document.createElement('div');
+  timelinePlayhead.className = 'timeline-playhead';
+
   function hideTimelineCursor() {
     timelineCursor.style.display = 'none';
     timelineCursorLabel.style.display = 'none';
@@ -713,6 +722,10 @@
       clip.appendChild(waveCanvas);
       drawWaveformRegion(waveCanvas, item.track.buffer, item.track.start, item.track.end);
 
+      const progressEl = document.createElement('div');
+      progressEl.className = 'timeline-clip-progress';
+      clip.appendChild(progressEl);
+
       const label = document.createElement('span');
       label.className = 'timeline-clip-label';
       label.textContent = `${item.track.name} (${item.clipDuration.toFixed(1)}s)`;
@@ -734,6 +747,70 @@
 
     timelineTrackEl.appendChild(timelineCursor);
     timelineTrackEl.appendChild(timelineCursorLabel);
+    timelineTrackEl.appendChild(timelinePlayhead);
+  }
+
+  // ---------- Playback progress indicator (playhead + played-shadow on clips) ----------
+  let progressRafId = null;
+
+  function stopProgressAnim() {
+    if (progressRafId != null) cancelAnimationFrame(progressRafId);
+    progressRafId = null;
+  }
+
+  // startCtxTime/duration는 AudioContext의 currentTime 기준(초). ctx.currentTime을
+  // 매 프레임 폴링해서 실제 오디오 진행 상황과 어긋나지 않게 맞춘다.
+  function startProgressAnim(ctx, startCtxTime, duration, onTick, onDone) {
+    stopProgressAnim();
+    const step = () => {
+      const elapsed = ctx.currentTime - startCtxTime;
+      if (elapsed >= duration) {
+        onTick(duration);
+        progressRafId = null;
+        if (onDone) onDone();
+        return;
+      }
+      onTick(Math.max(0, elapsed));
+      progressRafId = requestAnimationFrame(step);
+    };
+    progressRafId = requestAnimationFrame(step);
+  }
+
+  function clearTimelineProgress() {
+    timelinePlayhead.style.display = 'none';
+    if (!timelineTrackEl) return;
+    timelineTrackEl.querySelectorAll('.timeline-clip-progress').forEach(el => { el.style.width = '0%'; });
+    timelineTrackEl.querySelectorAll('.timeline-clip.playing').forEach(el => el.classList.remove('playing'));
+  }
+
+  function clearAllRowPlayheads() {
+    trackList.querySelectorAll('.wave-playhead').forEach(el => { el.style.display = 'none'; });
+  }
+
+  // 믹스 전체 재생 중: 타임라인을 가로지르는 선 + 각 클립이 재생된 만큼 그림자 채우기
+  function updateTimelineProgressForItems(items, elapsed) {
+    timelinePlayhead.style.display = 'block';
+    timelinePlayhead.style.left = (elapsed * PX_PER_SEC) + 'px';
+    items.forEach(item => {
+      const clip = timelineTrackEl.querySelector(`.timeline-clip[data-id="${item.track.id}"]`);
+      if (!clip) return;
+      const progressEl = clip.querySelector('.timeline-clip-progress');
+      const local = elapsed - item.timelineStart;
+      let pct = 0;
+      if (local <= 0) pct = 0;
+      else if (local >= item.clipDuration) pct = 100;
+      else pct = (local / item.clipDuration) * 100;
+      if (progressEl) progressEl.style.width = pct + '%';
+      clip.classList.toggle('playing', local > 0 && local < item.clipDuration);
+    });
+  }
+
+  function setRowPlayhead(track, fraction, visible) {
+    const wavePlayhead = trackList.querySelector(`[data-id="${track.id}"] .wave-playhead`);
+    if (!wavePlayhead) return;
+    if (!visible) { wavePlayhead.style.display = 'none'; return; }
+    wavePlayhead.style.left = (Math.max(0, Math.min(1, fraction)) * 100) + '%';
+    wavePlayhead.style.display = 'block';
   }
 
   function makeClipDraggable(clip, track) {
@@ -878,6 +955,12 @@
     timelineStopBtn.disabled = false;
     setStatus(`재생 중... 총 ${totalDuration.toFixed(1)}초`);
 
+    startProgressAnim(ctx, baseTime, totalDuration, (elapsed) => {
+      updateTimelineProgressForItems(items, elapsed);
+    }, () => {
+      clearTimelineProgress();
+    });
+
     const endTimer = setTimeout(() => {
       playBtn.disabled = false;
       timelinePlayBtn.disabled = false;
@@ -902,6 +985,9 @@
     stopBtn.disabled = true;
     timelineStopBtn.disabled = true;
     setStatus('정지됨');
+    stopProgressAnim();
+    clearTimelineProgress();
+    clearAllRowPlayheads();
   }
 
   function stopTrackPreview() {
@@ -915,6 +1001,9 @@
       state.trackPreviewBtn.classList.remove('playing');
       state.trackPreviewBtn = null;
     }
+    stopProgressAnim();
+    clearTimelineProgress();
+    clearAllRowPlayheads();
   }
 
   // 파형(트랙 편집 목록 + 타임라인) 아무 지점을 클릭했을 때 그 지점부터 재생.
@@ -933,7 +1022,8 @@
       fadeIn: isSeek ? 0 : track.fadeIn,
     });
     const item = { track: seeked, clipDuration };
-    const src = scheduleTrack(ctx, ctx.destination, item, ctx.currentTime + 0.05);
+    const startCtxTime = ctx.currentTime + 0.05;
+    const src = scheduleTrack(ctx, ctx.destination, item, startCtxTime);
     state.trackPreviewSource = src;
     state.trackPreviewBtn = btn;
     if (btn) {
@@ -941,6 +1031,31 @@
       btn.classList.add('playing');
     }
     setStatus(`${track.name} 미리듣기 중... (${formatTime(startAt)}부터)`);
+
+    // 이 곡 하나만 미리듣는 중에도 파형 위 재생선 + 타임라인의 해당 클립 진행 표시를 함께 움직인다.
+    const fullRange = Math.max(0.001, track.end - track.start);
+    const seekOffset = startAt - track.start;
+    const { items: fullItems } = computeTimeline();
+    const matchedItem = fullItems.find(it => it.track.id === track.id);
+
+    startProgressAnim(ctx, startCtxTime, clipDuration, (elapsed) => {
+      const playedFraction = (seekOffset + elapsed) / fullRange;
+      setRowPlayhead(track, playedFraction, true);
+      if (matchedItem) {
+        timelinePlayhead.style.display = 'block';
+        timelinePlayhead.style.left = ((matchedItem.timelineStart + seekOffset + elapsed) * PX_PER_SEC) + 'px';
+        const clip = timelineTrackEl.querySelector(`.timeline-clip[data-id="${track.id}"]`);
+        if (clip) {
+          const progressEl = clip.querySelector('.timeline-clip-progress');
+          if (progressEl) progressEl.style.width = (Math.max(0, Math.min(1, playedFraction)) * 100) + '%';
+          clip.classList.add('playing');
+        }
+      }
+    }, () => {
+      setRowPlayhead(track, 0, false);
+      clearTimelineProgress();
+    });
+
     const endTimer = setTimeout(() => {
       if (state.trackPreviewBtn === btn) stopTrackPreview();
     }, clipDuration * 1000 + 150);
