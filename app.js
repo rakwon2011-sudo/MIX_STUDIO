@@ -11,6 +11,7 @@
     videoFile: null,
     trackPreviewSource: null,
     trackPreviewBtn: null,
+    clipboard: null, // { name, type, buffer, start, end, volume, fadeIn, fadeOut, crossfadeAfter, bpm, beatTimes }
   };
 
   let nextId = 1;
@@ -32,6 +33,9 @@
   const progressText = document.getElementById('progressText');
   const beatBpmInput = document.getElementById('beatBpm');
   const beatBarsInput = document.getElementById('beatBars');
+  const timelineTrackEl = document.getElementById('timelineTrack');
+  const pasteEndBtn = document.getElementById('pasteEndBtn');
+  const PX_PER_SEC = 40;
 
   function setStatus(msg) { statusEl.textContent = msg || ''; }
   function showProgress(msg) { progressText.textContent = msg; progressOverlay.classList.remove('hidden'); }
@@ -92,6 +96,7 @@
       state.tracks.push(track);
       renderTrack(track);
       updateEmptyState();
+      renderTimeline();
       setStatus(`${file.name} 추가됨`);
       detectBpm(track);
     } catch (err) {
@@ -142,6 +147,7 @@
       state.tracks.push(track);
       renderTrack(track);
       updateEmptyState();
+      renderTimeline();
       setStatus(`${track.name} 추가됨`);
     });
   });
@@ -237,7 +243,7 @@
 
     const nameInput = row.querySelector('.track-name');
     nameInput.value = track.name;
-    nameInput.addEventListener('input', () => { track.name = nameInput.value; });
+    nameInput.addEventListener('input', () => { track.name = nameInput.value; renderTimeline(); });
     row.querySelector('.track-bpm').textContent = track.bpm ? `BPM ${track.bpm.toFixed(1)}` : 'BPM 분석 중...';
 
     const canvas = row.querySelector('.waveform');
@@ -281,12 +287,14 @@
       track.start = val;
       startInput.value = val.toFixed(2);
       positionHandles();
+      renderTimeline();
     }
     function setEnd(val) {
       val = Math.min(track.buffer.duration, Math.max(val, track.start + 0.05));
       track.end = val;
       endInput.value = val.toFixed(2);
       positionHandles();
+      renderTimeline();
     }
 
     startInput.addEventListener('input', () => setStart(parseFloat(startInput.value) || 0));
@@ -299,6 +307,7 @@
     });
     crossfadeInput.addEventListener('input', () => {
       track.crossfadeAfter = Math.max(0, parseFloat(crossfadeInput.value) || 0);
+      renderTimeline();
     });
 
     row.querySelector('.snap-start').addEventListener('click', () => {
@@ -335,10 +344,38 @@
       row.remove();
       updateEmptyState();
       renumberTracks();
+      renderTimeline();
     });
 
     row.querySelector('.move-up').addEventListener('click', () => moveTrack(track.id, -1));
     row.querySelector('.move-down').addEventListener('click', () => moveTrack(track.id, 1));
+    row.querySelector('.btn-duplicate').addEventListener('click', () => duplicateTrack(track));
+
+    row.querySelector('.btn-copy').addEventListener('click', () => {
+      state.clipboard = {
+        name: track.name,
+        type: track.type,
+        buffer: track.buffer,
+        start: track.start,
+        end: track.end,
+        volume: track.volume,
+        fadeIn: track.fadeIn,
+        fadeOut: track.fadeOut,
+        crossfadeAfter: track.crossfadeAfter,
+        bpm: track.bpm,
+        beatOffset: track.beatOffset,
+        beatTimes: track.beatTimes,
+      };
+      refreshPasteButtons();
+      setStatus(`${track.name} 구간 (${(track.end - track.start).toFixed(1)}초) 복사됨 — 원하는 곡 옆 "붙여넣기"를 누르세요`);
+    });
+
+    const pasteBtn = row.querySelector('.btn-paste');
+    pasteBtn.addEventListener('click', () => {
+      if (!state.clipboard) return;
+      const idx = state.tracks.findIndex(t => t.id === track.id);
+      pasteClipboardAt(idx + 1);
+    });
 
     const playTrackBtn = row.querySelector('.btn-play-track');
     playTrackBtn.addEventListener('click', async () => {
@@ -397,13 +434,74 @@
     if (newIdx < 0 || newIdx >= state.tracks.length) return;
     const [t] = state.tracks.splice(idx, 1);
     state.tracks.splice(newIdx, 0, t);
-    // re-render list order
+    reorderTrackListDom();
+    renderTimeline();
+  }
+
+  function reorderTrackListDom() {
     const rows = {};
     Array.from(trackList.children).forEach(row => { rows[row.dataset.id] = row; });
     trackList.innerHTML = '';
     state.tracks.forEach(tr => trackList.appendChild(rows[tr.id]));
     renumberTracks();
   }
+
+  // Duplicate a track (same audio, same decoded buffer) so the user can cut a
+  // different phrase/segment out of the same song without re-uploading the file.
+  function duplicateTrack(track) {
+    const idx = state.tracks.findIndex(t => t.id === track.id);
+    const clipDur = track.end - track.start;
+    let newStart = track.end;
+    let newEnd = Math.min(track.buffer.duration, track.end + clipDur);
+    if (newEnd - newStart < 0.1) { newStart = track.start; newEnd = track.end; }
+    const newTrack = {
+      ...track,
+      id: nextId++,
+      name: track.name,
+      start: newStart,
+      end: newEnd,
+    };
+    state.tracks.splice(idx + 1, 0, newTrack);
+    renderTrack(newTrack);
+    reorderTrackListDom();
+    renderTimeline();
+    setStatus(`${track.name} 구간 복제됨 — 새 구간을 조정하세요`);
+  }
+
+  // ---------- Copy / paste a cut segment to another point in the timeline ----------
+  function refreshPasteButtons() {
+    const hasClip = !!state.clipboard;
+    document.querySelectorAll('.btn-paste').forEach(btn => { btn.disabled = !hasClip; });
+    pasteEndBtn.disabled = !hasClip;
+  }
+
+  function pasteClipboardAt(index) {
+    const c = state.clipboard;
+    if (!c) return;
+    const newTrack = {
+      id: nextId++,
+      type: c.type,
+      name: c.name,
+      buffer: c.buffer,
+      start: c.start,
+      end: c.end,
+      volume: c.volume,
+      fadeIn: c.fadeIn,
+      fadeOut: c.fadeOut,
+      crossfadeAfter: c.crossfadeAfter,
+      bpm: c.bpm,
+      beatOffset: c.beatOffset,
+      beatTimes: c.beatTimes || [],
+    };
+    state.tracks.splice(index, 0, newTrack);
+    renderTrack(newTrack);
+    reorderTrackListDom();
+    updateEmptyState();
+    renderTimeline();
+    setStatus(`${c.name} 구간이 붙여넣기됨`);
+  }
+
+  pasteEndBtn.addEventListener('click', () => pasteClipboardAt(state.tracks.length));
 
   // ---------- Waveform drawing ----------
   function drawWaveform(canvas, buffer) {
@@ -452,6 +550,131 @@
       ? items[items.length - 1].timelineStart + items[items.length - 1].clipDuration
       : 0;
     return { items, totalDuration };
+  }
+
+  // ---------- Timeline view (drag to reorder, drag handle to crossfade) ----------
+  function trackColor(id) {
+    const hue = (id * 67) % 360;
+    return `hsl(${hue}, 62%, 55%)`;
+  }
+
+  function renderTimeline() {
+    if (!timelineTrackEl) return;
+    timelineTrackEl.innerHTML = '';
+    const { items, totalDuration } = computeTimeline();
+    if (items.length === 0) {
+      timelineTrackEl.style.width = '100%';
+      const empty = document.createElement('div');
+      empty.className = 'timeline-empty';
+      empty.textContent = '곡을 추가하면 여기에 타임라인이 표시됩니다.';
+      timelineTrackEl.appendChild(empty);
+      return;
+    }
+    const widthPx = Math.max(totalDuration * PX_PER_SEC, 200);
+    timelineTrackEl.style.width = widthPx + 'px';
+
+    items.forEach((item, i) => {
+      const clip = document.createElement('div');
+      clip.className = 'timeline-clip';
+      clip.dataset.id = item.track.id;
+      clip.style.left = (item.timelineStart * PX_PER_SEC) + 'px';
+      clip.style.width = Math.max(item.clipDuration * PX_PER_SEC, 4) + 'px';
+      clip.style.background = trackColor(item.track.id);
+      clip.textContent = `${item.track.name} (${item.clipDuration.toFixed(1)}s)`;
+      timelineTrackEl.appendChild(clip);
+      makeClipDraggable(clip, item.track);
+
+      if (i < items.length - 1) {
+        const nextItem = items[i + 1];
+        const handle = document.createElement('div');
+        handle.className = 'timeline-handle';
+        handle.style.left = (nextItem.timelineStart * PX_PER_SEC) + 'px';
+        handle.title = '드래그해서 크로스페이드 조정';
+        timelineTrackEl.appendChild(handle);
+        makeCrossfadeHandleDraggable(handle, item.track, item, nextItem);
+      }
+    });
+  }
+
+  function makeClipDraggable(clip, track) {
+    clip.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      clip.setPointerCapture(e.pointerId);
+      clip.classList.add('dragging');
+      const startClientX = e.clientX;
+      const snapshot = computeTimeline().items;
+      let moved = false;
+
+      const onMove = (ev) => {
+        const dx = ev.clientX - startClientX;
+        if (Math.abs(dx) > 4) moved = true;
+        clip.style.transform = `translateX(${dx}px)`;
+      };
+      const onUp = (ev) => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        clip.classList.remove('dragging');
+        clip.style.transform = '';
+        if (moved) {
+          const rect = timelineTrackEl.getBoundingClientRect();
+          const dropX = ev.clientX - rect.left;
+          const others = snapshot.filter(it => it.track.id !== track.id);
+          let targetIndex = others.length;
+          for (let i = 0; i < others.length; i++) {
+            const center = (others[i].timelineStart + others[i].clipDuration / 2) * PX_PER_SEC;
+            if (dropX < center) { targetIndex = i; break; }
+          }
+          const curIdx = state.tracks.findIndex(t => t.id === track.id);
+          if (curIdx !== -1) {
+            const [t] = state.tracks.splice(curIdx, 1);
+            state.tracks.splice(targetIndex, 0, t);
+            reorderTrackListDom();
+          }
+          renderTimeline();
+        } else {
+          highlightTrackRow(track.id);
+        }
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    });
+  }
+
+  function makeCrossfadeHandleDraggable(handle, track, item, nextItem) {
+    handle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      handle.setPointerCapture(e.pointerId);
+      const startX = e.clientX;
+      const startCrossfade = track.crossfadeAfter || 0;
+      const maxCrossfade = Math.min(item.clipDuration, nextItem.clipDuration);
+
+      const onMove = (ev) => {
+        const dxSec = (ev.clientX - startX) / PX_PER_SEC;
+        let newVal = startCrossfade - dxSec; // drag left = more overlap, right = less
+        newVal = Math.max(0, Math.min(maxCrossfade, newVal));
+        track.crossfadeAfter = newVal;
+        setStatus(`크로스페이드: ${newVal.toFixed(2)}초`);
+        const row = trackList.querySelector(`[data-id="${track.id}"]`);
+        const input = row?.querySelector('.in-crossfade');
+        if (input) input.value = newVal.toFixed(2);
+      };
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        renderTimeline();
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    });
+  }
+
+  function highlightTrackRow(id) {
+    const row = trackList.querySelector(`[data-id="${id}"]`);
+    if (!row) return;
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    row.classList.add('highlight');
+    setTimeout(() => row.classList.remove('highlight'), 900);
   }
 
   // ---------- Scheduling helper (shared by preview + export) ----------
@@ -614,5 +837,6 @@
     return new Blob([arrayBuffer], { type: 'audio/wav' });
   }
 
+  renderTimeline();
   setStatus('브라우저 안에서만 작동합니다. 파일은 어디로도 업로드되지 않습니다.');
 })();
