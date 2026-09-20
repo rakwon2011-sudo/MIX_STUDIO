@@ -45,7 +45,13 @@
   const importProjectInput = document.getElementById('importProjectInput');
   const timelinePlayBtn = document.getElementById('timelinePlayBtn');
   const timelineStopBtn = document.getElementById('timelineStopBtn');
-  const PX_PER_SEC = 40;
+  const zoomInBtn = document.getElementById('zoomInBtn');
+  const zoomOutBtn = document.getElementById('zoomOutBtn');
+  const zoomLevelLabel = document.getElementById('zoomLevelLabel');
+  const PX_PER_SEC_DEFAULT = 40;
+  const PX_PER_SEC_MIN = 10;
+  const PX_PER_SEC_MAX = 240;
+  let PX_PER_SEC = PX_PER_SEC_DEFAULT; // 타임라인 확대/축소 배율 — 초당 픽셀 수. 값이 클수록 파형이 넓게, 세밀하게 보임.
 
   function setStatus(msg) { statusEl.textContent = msg || ''; }
   function showProgress(msg) { progressText.textContent = msg; progressOverlay.classList.remove('hidden'); }
@@ -624,6 +630,16 @@
     renderTimeline();
     markDirty();
     setStatus(`${c.name} 구간이 타임라인에 붙여넣기됨 — 클립 가장자리를 드래그하면 다시 자르거나 늘릴 수 있어요`);
+    flashPastedClip(clipEntry.id);
+  }
+
+  // 방금 붙여넣은 클립이 어디 붙었는지 한눈에 보이도록, 화면에 스크롤해서 보여주고 잠깐 반짝임 효과를 준다.
+  function flashPastedClip(clipId) {
+    const el = timelineTrackEl && timelineTrackEl.querySelector(`.timeline-clip[data-key="clip-${clipId}"]`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    el.classList.add('just-pasted');
+    setTimeout(() => el.classList.remove('just-pasted'), 1400);
   }
 
   pasteEndBtn.addEventListener('click', () => pasteClipboardAt(state.sequence.length));
@@ -751,12 +767,25 @@
   }
 
   // ---------- Timeline view (drag to reorder, drag handle to crossfade) ----------
+  // 원곡(파란 바)에서 그대로 이어진 타임라인 클립의 색. 복사해서 붙여넣은 독립 구간과 절대
+  // 안 겹치도록 보라~마젠타 대역(270~330도)은 건너뛰고 나머지 300도 범위 안에서만 고른다.
   function trackColor(key) {
     let hash = 0;
     const s = String(key);
     for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
-    const hue = hash % 360;
+    let hue = hash % 300;
+    if (hue >= 270) hue += 60; // 270~299 -> 330~359 로 밀어서 270~330 대역을 비움
     return `hsl(${hue}, 62%, 55%)`;
+  }
+
+  // 목록에 카드가 없는, 복사해서 붙여넣은 독립 구간은 원곡(파란 바)들과 한눈에 구분되도록
+  // 늘 보라~마젠타 색 범위(270~330) 안에서만 고른다 — trackColor()는 이 대역을 쓰지 않는다.
+  function pastedClipColor(id) {
+    let hash = 0;
+    const s = 'clip-' + id;
+    for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
+    const hue = 270 + (hash % 60);
+    return `hsl(${hue}, 72%, 60%)`;
   }
 
   // 타임라인 위에 마우스를 올리면 세로선 커서 + 시간 표시가 따라다님.
@@ -793,6 +822,17 @@
     timelineTrackEl.addEventListener('mouseleave', hideTimelineCursor);
   }
 
+  // ---------- Timeline zoom (파형을 세밀하게 보려고 늘리거나, 전체를 보려고 줄이기) ----------
+  function setZoom(px) {
+    PX_PER_SEC = Math.max(PX_PER_SEC_MIN, Math.min(PX_PER_SEC_MAX, px));
+    if (zoomLevelLabel) zoomLevelLabel.textContent = Math.round((PX_PER_SEC / PX_PER_SEC_DEFAULT) * 100) + '%';
+    if (zoomOutBtn) zoomOutBtn.disabled = PX_PER_SEC <= PX_PER_SEC_MIN;
+    if (zoomInBtn) zoomInBtn.disabled = PX_PER_SEC >= PX_PER_SEC_MAX;
+    renderTimeline();
+  }
+  if (zoomInBtn) zoomInBtn.addEventListener('click', () => setZoom(PX_PER_SEC * 1.4));
+  if (zoomOutBtn) zoomOutBtn.addEventListener('click', () => setZoom(PX_PER_SEC / 1.4));
+
   function renderTimeline() {
     if (!timelineTrackEl) return;
     timelineTrackEl.innerHTML = '';
@@ -814,7 +854,7 @@
       clip.dataset.key = item.key;
       clip.style.left = (item.timelineStart * PX_PER_SEC) + 'px';
       clip.style.width = Math.max(item.clipDuration * PX_PER_SEC, 4) + 'px';
-      clip.style.background = trackColor(item.key);
+      clip.style.background = item.kind === 'clip' ? pastedClipColor(item.id) : trackColor(item.key);
 
       const clipWidthPx = Math.max(Math.round(item.clipDuration * PX_PER_SEC), 4);
       const waveCanvas = document.createElement('canvas');

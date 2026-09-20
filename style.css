@@ -433,7 +433,35 @@ main {
 
 .timeline-transport {
   display: flex;
+  align-items: center;
   gap: 8px;
+}
+
+.zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 4px;
+  padding-right: 8px;
+  border-right: 1px solid var(--border);
+}
+
+.btn-zoom {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.zoom-level {
+  font-size: 11px;
+  color: var(--text-dim);
+  min-width: 34px;
+  text-align: center;
 }
 
 .timeline-scroll {
@@ -611,6 +639,16 @@ body.has-clipboard .timeline-handle-edge::after {
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35) inset, 0 0 0 1px rgba(255, 255, 255, 0.5);
   outline: 1px dashed rgba(255, 255, 255, 0.55);
   outline-offset: -3px;
+}
+
+/* 방금 붙여넣은 클립을 잠깐 반짝여서 "여기 붙었다"를 바로 알 수 있게 함 */
+.timeline-clip.just-pasted {
+  animation: paste-flash 1.4s ease-out;
+}
+@keyframes paste-flash {
+  0% { box-shadow: 0 0 0 3px var(--ok), 0 0 18px rgba(74, 222, 128, 0.9); }
+  70% { box-shadow: 0 0 0 3px var(--ok), 0 0 18px rgba(74, 222, 128, 0.9); }
+  100% { box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35) inset; }
 }
 
 /* 독립 구간의 좌우 가장자리를 드래그해서 직접 자르거나 늘리는 손잡이 */
