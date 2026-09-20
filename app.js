@@ -5,13 +5,19 @@
   'use strict';
 
   const state = {
-    tracks: [],       // { id, type:'audio'|'beat', name, buffer, start, end, volume, fadeIn, fadeOut, crossfadeAfter, bpm, beatTimes }
+    tracks: [],       // 소스 목록(파란 바): { id, type:'audio'|'beat', name, buffer, start, end, volume, fadeIn, fadeOut, crossfadeAfter, bpm, beatTimes }
+    // 타임라인 시퀀스. 두 종류의 항목이 순서대로 섞여 들어간다:
+    //  - { kind:'track', trackId }        : 곡 목록의 그 트랙을 그대로 가리킴 (트림은 목록 쪽에서 편집)
+    //  - { kind:'clip', id, ...자체 필드 } : 목록에 카드로 안 보이는, 복사해서 붙여넣은 독립 구간
+    //                                        (타임라인 위에서 직접 자르고 늘릴 수 있음)
+    sequence: [],
     audioCtx: null,
     activeSources: [],
     videoFile: null,
     trackPreviewSource: null,
     trackPreviewBtn: null,
     clipboard: null, // { name, type, buffer, start, end, volume, fadeIn, fadeOut, crossfadeAfter, bpm, beatTimes }
+    selectedTrackId: null, // Ctrl/Cmd+C, Ctrl/Cmd+V 대상 트랙
   };
 
   let nextId = 1;
@@ -63,9 +69,10 @@
   function updateEmptyState() {
     emptyState.style.display = state.tracks.length === 0 ? 'block' : 'none';
     const hasTracks = state.tracks.length > 0;
-    playBtn.disabled = !hasTracks;
-    timelinePlayBtn.disabled = !hasTracks;
-    exportBtn.disabled = !hasTracks;
+    const hasTimelineContent = state.sequence.length > 0;
+    playBtn.disabled = !hasTimelineContent;
+    timelinePlayBtn.disabled = !hasTimelineContent;
+    exportBtn.disabled = !hasTimelineContent;
     exportProjectBtn.disabled = !hasTracks;
   }
 
@@ -110,6 +117,7 @@
         beatTimes: [],
       };
       state.tracks.push(track);
+      state.sequence.push({ kind: 'track', trackId: track.id });
       renderTrack(track);
       updateEmptyState();
       renderTimeline();
@@ -166,6 +174,7 @@
       track.beatBpm = bpm;
       track.beatBars = bars;
       state.tracks.push(track);
+      state.sequence.push({ kind: 'track', trackId: track.id });
       renderTrack(track);
       updateEmptyState();
       renderTimeline();
@@ -411,6 +420,7 @@
 
     row.querySelector('.btn-remove').addEventListener('click', () => {
       state.tracks = state.tracks.filter(t => t.id !== track.id);
+      state.sequence = state.sequence.filter(e => !(e.kind === 'track' && e.trackId === track.id));
       row.remove();
       updateEmptyState();
       renumberTracks();
@@ -422,35 +432,20 @@
     row.querySelector('.move-down').addEventListener('click', () => moveTrack(track.id, 1));
     row.querySelector('.btn-duplicate').addEventListener('click', () => duplicateTrack(track));
 
-    row.querySelector('.btn-copy').addEventListener('click', () => {
-      state.clipboard = {
-        name: track.name,
-        type: track.type,
-        buffer: track.buffer,
-        start: track.start,
-        end: track.end,
-        volume: track.volume,
-        fadeIn: track.fadeIn,
-        fadeOut: track.fadeOut,
-        crossfadeAfter: track.crossfadeAfter,
-        bpm: track.bpm,
-        beatOffset: track.beatOffset,
-        beatTimes: track.beatTimes,
-        fileData: track.fileData,
-        fileType: track.fileType,
-        beatType: track.beatType,
-        beatBpm: track.beatBpm,
-        beatBars: track.beatBars,
-      };
-      refreshPasteButtons();
-      setStatus(`${track.name} 구간 (${(track.end - track.start).toFixed(1)}초) 복사됨 — 원하는 곡 옆 "붙여넣기"를 누르세요`);
+    row.querySelector('.btn-copy').addEventListener('click', () => copyRegionToClipboard(track));
+
+    // 행 배경(버튼·입력칸 제외)을 클릭하면 이 트랙이 "선택"됨 — Ctrl/Cmd+C, Ctrl/Cmd+V로
+    // 키보드 단축키 복사/붙여넣기를 할 때 어느 트랙을 대상으로 할지 표시하는 용도.
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('button, input, .btn-move')) return;
+      selectTrack(track.id);
     });
 
     const pasteBtn = row.querySelector('.btn-paste');
     pasteBtn.addEventListener('click', () => {
       if (!state.clipboard) return;
-      const idx = state.tracks.findIndex(t => t.id === track.id);
-      pasteClipboardAt(idx + 1);
+      const seqIdx = state.sequence.findIndex(e => e.kind === 'track' && e.trackId === track.id);
+      pasteClipboardAt(seqIdx === -1 ? state.sequence.length : seqIdx + 1);
     });
 
     const playTrackBtn = row.querySelector('.btn-play-track');
@@ -524,6 +519,10 @@
       end: newEnd,
     };
     state.tracks.splice(idx + 1, 0, newTrack);
+    // 곡 목록 순서(idx+1)와 똑같은 자리에 타임라인 시퀀스 항목도 추가 — 목록에 카드가 하나
+    // 생기는 "복제"는 지금까지처럼 타임라인에도 그대로 나타난다 (원본 바로 뒤에).
+    const origSeqIdx = state.sequence.findIndex(e => e.kind === 'track' && e.trackId === track.id);
+    state.sequence.splice(origSeqIdx === -1 ? state.sequence.length : origSeqIdx + 1, 0, { kind: 'track', trackId: newTrack.id });
     renderTrack(newTrack);
     reorderTrackListDom();
     renderTimeline();
@@ -540,10 +539,66 @@
     document.body.classList.toggle('has-clipboard', hasClip);
   }
 
-  function pasteClipboardAt(index) {
+  // track(곡 목록 카드) 또는 clip(타임라인에 이미 붙여넣은 독립 구간) 둘 다 받을 수 있음 —
+  // 필드 구성이 같아서 그대로 복사해둘 수 있다.
+  function copyRegionToClipboard(source) {
+    state.clipboard = {
+      name: source.name,
+      type: source.type,
+      buffer: source.buffer,
+      start: source.start,
+      end: source.end,
+      volume: source.volume,
+      fadeIn: source.fadeIn,
+      fadeOut: source.fadeOut,
+      crossfadeAfter: source.crossfadeAfter,
+      bpm: source.bpm,
+      beatOffset: source.beatOffset,
+      beatTimes: source.beatTimes,
+      fileData: source.fileData,
+      fileType: source.fileType,
+      beatType: source.beatType,
+      beatBpm: source.beatBpm,
+      beatBars: source.beatBars,
+    };
+    refreshPasteButtons();
+    setStatus(`${source.name} 구간 (${(source.end - source.start).toFixed(1)}초) 복사됨 — 원하는 곡 옆 "붙여넣기"를 누르거나 타임라인의 초록 ➕를 클릭하세요 (Ctrl/Cmd+V도 가능)`);
+  }
+
+  // 지금 선택된 트랙 표시 (Ctrl/Cmd+C, Ctrl/Cmd+V 대상). 배경(버튼·입력칸 제외)을 클릭하면 바뀐다.
+  function selectTrack(id) {
+    state.selectedTrackId = id;
+    trackList.querySelectorAll('.track-row').forEach(row => {
+      row.classList.toggle('selected', Number(row.dataset.id) === id);
+    });
+  }
+
+  document.addEventListener('keydown', (e) => {
+    const key = e.key.toLowerCase();
+    if (!(e.metaKey || e.ctrlKey) || (key !== 'c' && key !== 'v')) return;
+    const activeTag = document.activeElement && document.activeElement.tagName;
+    if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') return; // 텍스트 편집 중엔 원래 복사/붙여넣기 동작을 건드리지 않음
+    if (key === 'c') {
+      const track = state.tracks.find(t => t.id === state.selectedTrackId);
+      if (!track) { setStatus('복사할 곡을 먼저 클릭해서 선택하세요'); return; }
+      e.preventDefault();
+      copyRegionToClipboard(track);
+    } else if (key === 'v') {
+      if (!state.clipboard) return;
+      e.preventDefault();
+      const seqIdx = state.sequence.findIndex(e2 => e2.kind === 'track' && e2.trackId === state.selectedTrackId);
+      pasteClipboardAt(seqIdx === -1 ? state.sequence.length : seqIdx + 1);
+    }
+  });
+
+  // 복사해둔 구간을 "타임라인 시퀀스에만" 새 독립 클립으로 끼워넣는다.
+  // 곡 목록(state.tracks)에는 아무 것도 추가하지 않으므로 파란 바가 또 하나 생기지 않는다 —
+  // 한 곡에서 구절을 여러 번 재사용하고 싶을 때를 위한 핵심 동작.
+  function pasteClipboardAt(seqIndex) {
     const c = state.clipboard;
     if (!c) return;
-    const newTrack = {
+    const clipEntry = {
+      kind: 'clip',
       id: nextId++,
       type: c.type,
       name: c.name,
@@ -553,7 +608,9 @@
       volume: c.volume,
       fadeIn: c.fadeIn,
       fadeOut: c.fadeOut,
-      crossfadeAfter: c.crossfadeAfter,
+      // 복사해둔 크로스페이드 값은 원래 위치 기준이라, 새 자리에 그대로 물려주면
+      // 바로 옆 곡과 예상 밖으로 겹쳐 보일 수 있다 (버그 리포트로 확인됨) — 0으로 시작.
+      crossfadeAfter: 0,
       bpm: c.bpm,
       beatOffset: c.beatOffset,
       beatTimes: c.beatTimes || [],
@@ -563,16 +620,13 @@
       beatBpm: c.beatBpm,
       beatBars: c.beatBars,
     };
-    state.tracks.splice(index, 0, newTrack);
-    renderTrack(newTrack);
-    reorderTrackListDom();
-    updateEmptyState();
+    state.sequence.splice(seqIndex, 0, clipEntry);
     renderTimeline();
     markDirty();
-    setStatus(`${c.name} 구간이 붙여넣기됨`);
+    setStatus(`${c.name} 구간이 타임라인에 붙여넣기됨 — 클립 가장자리를 드래그하면 다시 자르거나 늘릴 수 있어요`);
   }
 
-  pasteEndBtn.addEventListener('click', () => pasteClipboardAt(state.tracks.length));
+  pasteEndBtn.addEventListener('click', () => pasteClipboardAt(state.sequence.length));
 
   // ---------- Waveform drawing ----------
   function drawWaveform(canvas, buffer) {
@@ -635,19 +689,59 @@
   }
 
   // ---------- Timeline computation ----------
+  // state.sequence의 각 항목을 "실제 재생/렌더에 필요한 값"으로 풀어준다.
+  // kind:'track'인 항목은 곡 목록의 트랙을 그대로 참조(트림 값은 목록에서 실시간으로 읽음),
+  // kind:'clip'인 항목은 자체 필드를 그대로 사용한다 (목록에 카드가 없는 독립 구간).
+  function resolveSeqEntry(entry) {
+    if (entry.kind === 'track') {
+      const track = state.tracks.find(t => t.id === entry.trackId);
+      if (!track) return null;
+      return {
+        key: 'track-' + track.id,
+        kind: 'track',
+        entry,
+        track,
+        id: track.id,
+        name: track.name,
+        buffer: track.buffer,
+        start: track.start,
+        end: track.end,
+        volume: track.volume,
+        fadeIn: track.fadeIn,
+        fadeOut: track.fadeOut,
+        crossfadeAfter: track.crossfadeAfter,
+      };
+    }
+    // kind: 'clip' — 독립 구간, 필드가 그 항목 자체에 있음
+    return {
+      key: 'clip-' + entry.id,
+      kind: 'clip',
+      entry,
+      id: entry.id,
+      name: entry.name,
+      buffer: entry.buffer,
+      start: entry.start,
+      end: entry.end,
+      volume: entry.volume,
+      fadeIn: entry.fadeIn,
+      fadeOut: entry.fadeOut,
+      crossfadeAfter: entry.crossfadeAfter,
+    };
+  }
+
   function computeTimeline() {
     let cursor = 0;
     const items = [];
-    for (let i = 0; i < state.tracks.length; i++) {
-      const track = state.tracks[i];
-      const clipDur = track.end - track.start;
-      const item = {
-        track,
+    const resolved = state.sequence.map(resolveSeqEntry).filter(Boolean);
+    for (let i = 0; i < resolved.length; i++) {
+      const r = resolved[i];
+      const clipDur = Math.max(0, r.end - r.start);
+      const item = Object.assign({}, r, {
         timelineStart: cursor,
         clipDuration: clipDur,
-      };
+      });
       items.push(item);
-      const crossfade = i < state.tracks.length - 1 ? Math.min(track.crossfadeAfter, clipDur) : 0;
+      const crossfade = i < resolved.length - 1 ? Math.min(r.crossfadeAfter || 0, clipDur) : 0;
       cursor = cursor + clipDur - crossfade;
     }
     const totalDuration = items.length
@@ -657,8 +751,11 @@
   }
 
   // ---------- Timeline view (drag to reorder, drag handle to crossfade) ----------
-  function trackColor(id) {
-    const hue = (id * 67) % 360;
+  function trackColor(key) {
+    let hash = 0;
+    const s = String(key);
+    for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
+    const hue = hash % 360;
     return `hsl(${hue}, 62%, 55%)`;
   }
 
@@ -714,10 +811,10 @@
     items.forEach((item, i) => {
       const clip = document.createElement('div');
       clip.className = 'timeline-clip';
-      clip.dataset.id = item.track.id;
+      clip.dataset.key = item.key;
       clip.style.left = (item.timelineStart * PX_PER_SEC) + 'px';
       clip.style.width = Math.max(item.clipDuration * PX_PER_SEC, 4) + 'px';
-      clip.style.background = trackColor(item.track.id);
+      clip.style.background = trackColor(item.key);
 
       const clipWidthPx = Math.max(Math.round(item.clipDuration * PX_PER_SEC), 4);
       const waveCanvas = document.createElement('canvas');
@@ -725,7 +822,7 @@
       waveCanvas.width = clipWidthPx;
       waveCanvas.height = 52;
       clip.appendChild(waveCanvas);
-      drawWaveformRegion(waveCanvas, item.track.buffer, item.track.start, item.track.end);
+      drawWaveformRegion(waveCanvas, item.buffer, item.start, item.end);
 
       const progressEl = document.createElement('div');
       progressEl.className = 'timeline-clip-progress';
@@ -733,11 +830,58 @@
 
       const label = document.createElement('span');
       label.className = 'timeline-clip-label';
-      label.textContent = `${item.track.name} (${item.clipDuration.toFixed(1)}s)`;
+      const tag = item.kind === 'clip' ? ' · 구간' : '';
+      label.textContent = `${item.name} (${item.clipDuration.toFixed(1)}s)${tag}`;
       clip.appendChild(label);
 
+      // kind:'clip'(목록에 카드 없는 독립 구간)만 타임라인 위에서 직접 자르고
+      // 늘리는 손잡이 + 복사/제거 버튼을 가진다. kind:'track'은 기존처럼 곡 목록에서 편집.
+      if (item.kind === 'clip') {
+        clip.classList.add('timeline-clip-standalone');
+
+        const trimLeft = document.createElement('div');
+        trimLeft.className = 'clip-trim-handle clip-trim-left';
+        clip.appendChild(trimLeft);
+        const trimRight = document.createElement('div');
+        trimRight.className = 'clip-trim-handle clip-trim-right';
+        clip.appendChild(trimRight);
+        makeClipTrimHandle(trimLeft, item, 'start');
+        makeClipTrimHandle(trimRight, item, 'end');
+
+        const toolbar = document.createElement('div');
+        toolbar.className = 'clip-toolbar';
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'clip-tool-btn';
+        copyBtn.textContent = '복사';
+        copyBtn.title = '이 구간을 다시 복사해서 다른 곳에 또 붙여넣기';
+        copyBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+        copyBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          copyRegionToClipboard(item.entry);
+        });
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'clip-tool-btn clip-tool-remove';
+        removeBtn.textContent = '✕';
+        removeBtn.title = '타임라인에서 이 구간 제거 (원본 곡은 그대로 남음)';
+        removeBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+        removeBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const idx = state.sequence.indexOf(item.entry);
+          if (idx !== -1) {
+            state.sequence.splice(idx, 1);
+            renderTimeline();
+            markDirty();
+          }
+        });
+        toolbar.appendChild(copyBtn);
+        toolbar.appendChild(removeBtn);
+        clip.appendChild(toolbar);
+      }
+
       timelineTrackEl.appendChild(clip);
-      makeClipDraggable(clip, item.track);
+      makeClipDraggable(clip, item);
 
       if (i < items.length - 1) {
         const nextItem = items[i + 1];
@@ -745,7 +889,7 @@
         handle.className = 'timeline-handle';
         handle.style.left = (nextItem.timelineStart * PX_PER_SEC) + 'px';
         timelineTrackEl.appendChild(handle);
-        makeCrossfadeHandleDraggable(handle, item.track, item, nextItem, nextItem.track.id);
+        makeCrossfadeHandleDraggable(handle, item, nextItem, i + 1);
       }
     });
 
@@ -805,7 +949,7 @@
     timelinePlayhead.style.display = 'block';
     timelinePlayhead.style.left = (elapsed * PX_PER_SEC) + 'px';
     items.forEach(item => {
-      const clip = timelineTrackEl.querySelector(`.timeline-clip[data-id="${item.track.id}"]`);
+      const clip = timelineTrackEl.querySelector(`.timeline-clip[data-key="${item.key}"]`);
       const local = elapsed - item.timelineStart;
       const playing = local > 0 && local < item.clipDuration;
       if (clip) {
@@ -817,10 +961,13 @@
         if (progressEl) progressEl.style.width = pct + '%';
         clip.classList.toggle('playing', playing);
       }
-      // 트랙 전체 버퍼 기준 위치로 환산해서 파형 바에도 표시
-      const absoluteTime = item.track.start + Math.max(0, Math.min(local, item.clipDuration));
-      const fraction = absoluteTime / item.track.buffer.duration;
-      setRowPlayhead(item.track, fraction, playing);
+      // 목록에 카드가 있는(kind:'track') 항목만 곡 목록 파형 바에도 재생 위치를 반영한다 —
+      // 목록에 없는 독립 구간(kind:'clip')은 표시할 파형 바가 없다.
+      if (item.kind === 'track') {
+        const absoluteTime = item.start + Math.max(0, Math.min(local, item.clipDuration));
+        const fraction = absoluteTime / item.buffer.duration;
+        setRowPlayhead(item.track, fraction, playing);
+      }
     });
   }
 
@@ -840,8 +987,9 @@
     if (waveProgress) { waveProgress.style.width = pct; waveProgress.style.display = 'block'; }
   }
 
-  function makeClipDraggable(clip, track) {
+  function makeClipDraggable(clip, item) {
     clip.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('.clip-trim-handle, .clip-toolbar')) return;
       e.preventDefault();
       clip.setPointerCapture(e.pointerId);
       clip.classList.add('dragging');
@@ -864,27 +1012,72 @@
         if (moved) {
           const rect = timelineTrackEl.getBoundingClientRect();
           const dropX = ev.clientX - rect.left;
-          const others = snapshot.filter(it => it.track.id !== track.id);
+          const others = snapshot.filter(it => it.key !== item.key);
           let targetIndex = others.length;
           for (let i = 0; i < others.length; i++) {
             const center = (others[i].timelineStart + others[i].clipDuration / 2) * PX_PER_SEC;
             if (dropX < center) { targetIndex = i; break; }
           }
-          const curIdx = state.tracks.findIndex(t => t.id === track.id);
+          const curIdx = state.sequence.indexOf(item.entry);
           if (curIdx !== -1) {
-            const [t] = state.tracks.splice(curIdx, 1);
-            state.tracks.splice(targetIndex, 0, t);
-            reorderTrackListDom();
+            const [entry] = state.sequence.splice(curIdx, 1);
+            state.sequence.splice(targetIndex, 0, entry);
             markDirty();
           }
           renderTimeline();
         } else {
-          // 드래그 없이 클릭만 한 경우: 클릭한 지점부터 바로 재생 + 해당 트랙 행 강조
+          // 드래그 없이 클릭만 한 경우: 클릭한 지점부터 바로 재생 (+ 목록 카드가 있으면 강조)
           const ratio = clipRect.width > 0 ? clickOffsetX / clipRect.width : 0;
-          const fromTime = track.start + ratio * (track.end - track.start);
-          playFromOffset(track, fromTime);
-          highlightTrackRow(track.id);
+          const fromTime = item.start + ratio * (item.end - item.start);
+          if (item.kind === 'track') {
+            playFromOffset(item.track, fromTime);
+            highlightTrackRow(item.track.id);
+          } else {
+            playClipPreview(item, fromTime);
+          }
         }
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    });
+  }
+
+  // 목록에 카드가 없는 독립 구간(kind:'clip') 클립을 타임라인 위에서 직접 자르거나 늘리는 손잡이.
+  function makeClipTrimHandle(handleEl, item, side) {
+    handleEl.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      handleEl.setPointerCapture(e.pointerId);
+      const entry = item.entry;
+      const startVal = entry.start;
+      const endVal = entry.end;
+      const bufferDur = entry.buffer.duration;
+      const startX = e.clientX;
+      const clipEl = handleEl.parentElement;
+      const baseLeftPx = parseFloat(clipEl.style.left) || 0;
+      const baseWidthPx = parseFloat(clipEl.style.width) || 0;
+
+      const onMove = (ev) => {
+        const dxPx = ev.clientX - startX;
+        if (side === 'start') {
+          const newWidth = Math.max(4, baseWidthPx - dxPx);
+          clipEl.style.left = (baseLeftPx + (baseWidthPx - newWidth)) + 'px';
+          clipEl.style.width = newWidth + 'px';
+        } else {
+          clipEl.style.width = Math.max(4, baseWidthPx + dxPx) + 'px';
+        }
+      };
+      const onUp = (ev) => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        const dxSec = (ev.clientX - startX) / PX_PER_SEC;
+        if (side === 'start') {
+          entry.start = Math.max(0, Math.min(startVal + dxSec, endVal - 0.1));
+        } else {
+          entry.end = Math.min(bufferDur, Math.max(endVal + dxSec, startVal + 0.1));
+        }
+        renderTimeline();
+        markDirty();
       };
       window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerup', onUp);
@@ -893,13 +1086,13 @@
 
   // 곡과 곡 사이의 손잡이: 드래그하면 크로스페이드 조정, 드래그 없이 클릭만 하면
   // (복사해둔 구간이 있을 때) 바로 그 지점에 붙여넣기.
-  function makeCrossfadeHandleDraggable(handle, track, item, nextItem, insertBeforeTrackId) {
+  function makeCrossfadeHandleDraggable(handle, item, nextItem, insertSeqIndex) {
     handle.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       e.stopPropagation();
       handle.setPointerCapture(e.pointerId);
       const startX = e.clientX;
-      const startCrossfade = track.crossfadeAfter || 0;
+      const startCrossfade = item.crossfadeAfter || 0;
       const maxCrossfade = Math.min(item.clipDuration, nextItem.clipDuration);
       let moved = false;
 
@@ -908,11 +1101,15 @@
         const dxSec = (ev.clientX - startX) / PX_PER_SEC;
         let newVal = startCrossfade - dxSec; // drag left = more overlap, right = less
         newVal = Math.max(0, Math.min(maxCrossfade, newVal));
-        track.crossfadeAfter = newVal;
+        if (item.kind === 'track') {
+          item.track.crossfadeAfter = newVal;
+          const row = trackList.querySelector(`[data-id="${item.id}"]`);
+          const input = row?.querySelector('.in-crossfade');
+          if (input) input.value = newVal.toFixed(2);
+        } else {
+          item.entry.crossfadeAfter = newVal;
+        }
         setStatus(`크로스페이드: ${newVal.toFixed(2)}초`);
-        const row = trackList.querySelector(`[data-id="${track.id}"]`);
-        const input = row?.querySelector('.in-crossfade');
-        if (input) input.value = newVal.toFixed(2);
       };
       const onUp = () => {
         window.removeEventListener('pointermove', onMove);
@@ -921,8 +1118,7 @@
           renderTimeline();
           markDirty();
         } else if (state.clipboard) {
-          const idx = state.tracks.findIndex(t => t.id === insertBeforeTrackId);
-          pasteClipboardAt(idx === -1 ? state.tracks.length : idx);
+          pasteClipboardAt(insertSeqIndex);
         }
       };
       window.addEventListener('pointermove', onMove);
@@ -951,17 +1147,19 @@
   }
 
   // ---------- Scheduling helper (shared by preview + export) ----------
+  // item: { buffer, start, volume, fadeIn, fadeOut, clipDuration } — kind:'track'와 kind:'clip'
+  // 둘 다 이 모양으로 정규화되어 들어온다 (computeTimeline() 참고).
   function scheduleTrack(ctx, destination, item, when) {
-    const { track, clipDuration } = item;
+    const { buffer, clipDuration } = item;
     const src = ctx.createBufferSource();
-    src.buffer = track.buffer;
+    src.buffer = buffer;
     const gain = ctx.createGain();
     src.connect(gain);
     gain.connect(destination);
 
-    const vol = (track.volume ?? 100) / 100;
-    const fadeIn = Math.min(track.fadeIn || 0, clipDuration / 2);
-    const fadeOut = Math.min(track.fadeOut || 0, clipDuration / 2);
+    const vol = (item.volume ?? 100) / 100;
+    const fadeIn = Math.min(item.fadeIn || 0, clipDuration / 2);
+    const fadeOut = Math.min(item.fadeOut || 0, clipDuration / 2);
 
     const t0 = when;
     const t1 = when + clipDuration;
@@ -973,7 +1171,7 @@
       gain.gain.linearRampToValueAtTime(0, t1);
     }
 
-    src.start(when, track.start, clipDuration);
+    src.start(when, item.start, clipDuration);
     return src;
   }
 
@@ -1028,8 +1226,8 @@
     state.activeSources.forEach(s => { try { s.stop(); } catch (e) {} });
     state.activeSources = [];
     videoPreview.pause();
-    playBtn.disabled = state.tracks.length === 0;
-    timelinePlayBtn.disabled = state.tracks.length === 0;
+    playBtn.disabled = state.sequence.length === 0;
+    timelinePlayBtn.disabled = state.sequence.length === 0;
     stopBtn.disabled = true;
     timelineStopBtn.disabled = true;
     setStatus('정지됨');
@@ -1055,46 +1253,53 @@
   }
 
   // 파형(트랙 편집 목록 + 타임라인) 아무 지점을 클릭했을 때 그 지점부터 재생.
-  // fromTime이 트랙의 시작점(start)보다 뒤라면 "가운데부터 스크럽"으로 보고 페이드인은 생략.
-  async function playFromOffset(track, fromTime) {
-    const btn = trackList.querySelector(`[data-id="${track.id}"] .btn-play-track`);
+  // fromTime이 구간의 시작점(start)보다 뒤라면 "가운데부터 스크럽"으로 보고 페이드인은 생략.
+  // source: { key, buffer, name, start, end, volume, fadeIn, fadeOut } — 곡 목록 트랙이든
+  // 타임라인의 독립 구간(clip)이든 같은 모양으로 넘기면 됨.
+  async function playRegionPreview(source, fromTime, opts) {
+    const btn = opts && opts.btn;
     const ctx = getAudioCtx();
     await ctx.resume();
     stopPreview();
     stopTrackPreview();
-    const startAt = Math.min(Math.max(fromTime, track.start), track.end - 0.05);
-    const isSeek = startAt > track.start + 0.01;
-    const clipDuration = track.end - startAt;
-    const seeked = Object.assign({}, track, {
+    const startAt = Math.min(Math.max(fromTime, source.start), source.end - 0.05);
+    const isSeek = startAt > source.start + 0.01;
+    const clipDuration = source.end - startAt;
+    const scheduleItem = {
+      buffer: source.buffer,
       start: startAt,
-      fadeIn: isSeek ? 0 : track.fadeIn,
-    });
-    const item = { track: seeked, clipDuration };
+      volume: source.volume,
+      fadeIn: isSeek ? 0 : source.fadeIn,
+      fadeOut: source.fadeOut,
+      clipDuration,
+    };
     const startCtxTime = ctx.currentTime + 0.05;
-    const src = scheduleTrack(ctx, ctx.destination, item, startCtxTime);
+    const src = scheduleTrack(ctx, ctx.destination, scheduleItem, startCtxTime);
     state.trackPreviewSource = src;
-    state.trackPreviewBtn = btn;
+    state.trackPreviewBtn = btn || null;
     if (btn) {
       btn.textContent = '■';
       btn.classList.add('playing');
     }
-    setStatus(`${track.name} 미리듣기 중... (${formatTime(startAt)}부터)`);
+    setStatus(`${source.name} 미리듣기 중... (${formatTime(startAt)}부터)`);
 
-    // 이 곡 하나만 미리듣는 중에도 파형 위 재생선 + 타임라인의 해당 클립 진행 표시를 함께 움직인다.
-    const bufferDuration = Math.max(0.001, track.buffer.duration);
-    const seekOffset = startAt - track.start;
+    // 이 구간 하나만 미리듣는 중에도 파형 위 재생선 + 타임라인의 해당 클립 진행 표시를 함께 움직인다.
+    const bufferDuration = Math.max(0.001, source.buffer.duration);
+    const seekOffset = startAt - source.start;
     const { items: fullItems } = computeTimeline();
-    const matchedItem = fullItems.find(it => it.track.id === track.id);
+    const matchedItem = fullItems.find(it => it.key === source.key);
 
     startProgressAnim(ctx, startCtxTime, clipDuration, (elapsed) => {
-      // 파형 바는 트랙 전체 버퍼(0~duration) 기준, 클립 구간(clipDuration) 기준이 아니다
-      const bufferFraction = (startAt + elapsed) / bufferDuration;
-      setRowPlayhead(track, bufferFraction, true);
+      if (opts && opts.trackForRow) {
+        // 파형 바는 트랙 전체 버퍼(0~duration) 기준, 클립 구간(clipDuration) 기준이 아니다
+        const bufferFraction = (startAt + elapsed) / bufferDuration;
+        setRowPlayhead(opts.trackForRow, bufferFraction, true);
+      }
       if (matchedItem) {
         const playedFraction = matchedItem.clipDuration > 0 ? (seekOffset + elapsed) / matchedItem.clipDuration : 0;
         timelinePlayhead.style.display = 'block';
         timelinePlayhead.style.left = ((matchedItem.timelineStart + seekOffset + elapsed) * PX_PER_SEC) + 'px';
-        const clip = timelineTrackEl.querySelector(`.timeline-clip[data-id="${track.id}"]`);
+        const clip = timelineTrackEl.querySelector(`.timeline-clip[data-key="${source.key}"]`);
         if (clip) {
           const progressEl = clip.querySelector('.timeline-clip-progress');
           if (progressEl) progressEl.style.width = (Math.max(0, Math.min(1, playedFraction)) * 100) + '%';
@@ -1102,14 +1307,33 @@
         }
       }
     }, () => {
-      setRowPlayhead(track, 0, false);
+      if (opts && opts.trackForRow) setRowPlayhead(opts.trackForRow, 0, false);
       clearTimelineProgress();
     });
 
     const endTimer = setTimeout(() => {
-      if (state.trackPreviewBtn === btn) stopTrackPreview();
+      if (state.trackPreviewBtn === (btn || null)) stopTrackPreview();
     }, clipDuration * 1000 + 150);
     src._endTimer = endTimer;
+  }
+
+  // 곡 목록(파란 바) 쪽에서 부르는 얇은 래퍼 — 재생 버튼/파형 바 재생선까지 함께 갱신.
+  async function playFromOffset(track, fromTime) {
+    const btn = trackList.querySelector(`[data-id="${track.id}"] .btn-play-track`);
+    await playRegionPreview(
+      { key: 'track-' + track.id, buffer: track.buffer, name: track.name, start: track.start, end: track.end, volume: track.volume, fadeIn: track.fadeIn, fadeOut: track.fadeOut },
+      fromTime,
+      { btn, trackForRow: track }
+    );
+  }
+
+  // 타임라인 위 독립 구간(kind:'clip', 목록에 카드 없음) 클릭 시 미리듣기 — 재생 버튼/행이 없음.
+  async function playClipPreview(item, fromTime) {
+    await playRegionPreview(
+      { key: item.key, buffer: item.buffer, name: item.name, start: item.start, end: item.end, volume: item.volume, fadeIn: item.fadeIn, fadeOut: item.fadeOut },
+      fromTime,
+      {}
+    );
   }
 
   // ---------- Export to WAV ----------
@@ -1118,7 +1342,7 @@
     if (items.length === 0) return;
     showProgress('믹스 렌더링 중...');
     try {
-      const sampleRate = state.tracks[0].buffer.sampleRate;
+      const sampleRate = items[0].buffer.sampleRate;
       const offlineCtx = new OfflineAudioContext(2, Math.ceil(totalDuration * sampleRate) + sampleRate, sampleRate);
       for (const item of items) {
         scheduleTrack(offlineCtx, offlineCtx.destination, item, item.timelineStart);
@@ -1195,17 +1419,22 @@
   // in this browser only — nothing is uploaded anywhere.
   const DB_NAME = 'mixstudio-db';
   const STORE_NAME = 'tracks';
+  const SEQ_STORE_NAME = 'sequence';
+  const DB_VERSION = 2;
   let dbPromise = null;
 
   function openDb() {
     if (!window.indexedDB) return Promise.resolve(null);
     if (dbPromise) return dbPromise;
     dbPromise = new Promise((resolve) => {
-      const req = indexedDB.open(DB_NAME, 1);
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
       req.onupgradeneeded = () => {
         const db = req.result;
         if (!db.objectStoreNames.contains(STORE_NAME)) {
           db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(SEQ_STORE_NAME)) {
+          db.createObjectStore(SEQ_STORE_NAME, { keyPath: 'order' });
         }
       };
       req.onsuccess = () => resolve(req.result);
@@ -1220,14 +1449,21 @@
     persistTimer = setTimeout(persistTracks, 500);
   }
 
+  // 곡 목록(state.tracks)과 타임라인 순서(state.sequence)를 함께 저장한다.
+  // 시퀀스의 kind:'track' 항목은 곡 목록에서의 "몇 번째 곡인지"(trackOrder)로 저장해뒀다가
+  // 불러올 때 새로 매겨지는 id에 다시 연결한다 — 새로고침마다 id가 바뀌기 때문.
   async function persistTracks() {
     const db = await openDb();
     if (!db) return;
     try {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const tx = db.transaction([STORE_NAME, SEQ_STORE_NAME], 'readwrite');
       const store = tx.objectStore(STORE_NAME);
+      const seqStore = tx.objectStore(SEQ_STORE_NAME);
       store.clear();
+      seqStore.clear();
+      const trackOrderById = {};
       state.tracks.forEach((track, order) => {
+        trackOrderById[track.id] = order;
         store.put({
           id: track.id,
           order,
@@ -1249,6 +1485,33 @@
           beatBars: track.type === 'beat' ? track.beatBars : null,
         });
       });
+      state.sequence.forEach((entry, order) => {
+        if (entry.kind === 'track') {
+          if (!(entry.trackId in trackOrderById)) return;
+          seqStore.put({ order, kind: 'track', trackOrder: trackOrderById[entry.trackId] });
+        } else {
+          seqStore.put({
+            order,
+            kind: 'clip',
+            type: entry.type,
+            name: entry.name,
+            start: entry.start,
+            end: entry.end,
+            volume: entry.volume,
+            fadeIn: entry.fadeIn,
+            fadeOut: entry.fadeOut,
+            crossfadeAfter: entry.crossfadeAfter,
+            bpm: entry.bpm || null,
+            beatOffset: entry.beatOffset || 0,
+            beatTimes: entry.beatTimes || [],
+            fileData: entry.type === 'audio' ? entry.fileData : null,
+            fileType: entry.type === 'audio' ? entry.fileType : null,
+            beatType: entry.type === 'beat' ? entry.beatType : null,
+            beatBpm: entry.type === 'beat' ? entry.beatBpm : null,
+            beatBars: entry.type === 'beat' ? entry.beatBars : null,
+          });
+        }
+      });
       await new Promise((resolve) => { tx.oncomplete = resolve; tx.onerror = resolve; });
     } catch (err) {
       console.warn('자동 저장 실패', err);
@@ -1258,12 +1521,17 @@
   async function loadPersistedTracks() {
     const db = await openDb();
     if (!db) return;
-    let records = [];
+    let trackRecords = [];
+    let seqRecords = [];
     try {
-      const tx = db.transaction(STORE_NAME, 'readonly');
-      const store = tx.objectStore(STORE_NAME);
-      records = await new Promise((resolve, reject) => {
-        const req = store.getAll();
+      const tx = db.transaction([STORE_NAME, SEQ_STORE_NAME], 'readonly');
+      trackRecords = await new Promise((resolve, reject) => {
+        const req = tx.objectStore(STORE_NAME).getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => reject(req.error);
+      });
+      seqRecords = await new Promise((resolve, reject) => {
+        const req = tx.objectStore(SEQ_STORE_NAME).getAll();
         req.onsuccess = () => resolve(req.result || []);
         req.onerror = () => reject(req.error);
       });
@@ -1271,12 +1539,15 @@
       console.warn('이전 작업 불러오기 실패', err);
       return;
     }
-    if (!records.length) return;
-    records.sort((a, b) => a.order - b.order);
+    if (!trackRecords.length) return;
+    trackRecords.sort((a, b) => a.order - b.order);
+    seqRecords.sort((a, b) => a.order - b.order);
     showProgress('이전에 저장된 곡 불러오는 중...');
     const ctx = getAudioCtx();
     let loaded = 0;
-    for (const rec of records) {
+    const idByTrackOrder = {};
+    for (let i = 0; i < trackRecords.length; i++) {
+      const rec = trackRecords[i];
       try {
         let track;
         if (rec.type === 'audio' && rec.fileData) {
@@ -1313,12 +1584,62 @@
         } else {
           continue;
         }
+        idByTrackOrder[rec.order] = track.id;
         state.tracks.push(track);
         renderTrack(track);
         loaded++;
       } catch (err) {
         console.warn('트랙 복원 실패', rec.name, err);
       }
+    }
+    // 타임라인 시퀀스 복원: kind:'track'은 방금 되살린 트랙 id로 연결하고,
+    // kind:'clip'(목록에 카드 없는 독립 구간)은 자체 오디오를 다시 디코딩해서 복원한다.
+    if (seqRecords.length) {
+      for (const rec of seqRecords) {
+        if (rec.kind === 'track') {
+          const trackId = idByTrackOrder[rec.trackOrder];
+          if (trackId != null) state.sequence.push({ kind: 'track', trackId });
+        } else if (rec.kind === 'clip') {
+          try {
+            let buffer = null;
+            if (rec.type === 'audio' && rec.fileData) {
+              buffer = await ctx.decodeAudioData(rec.fileData.slice(0));
+            } else if (rec.type === 'beat' && rec.beatType) {
+              buffer = synthesizeBeat(rec.beatType, rec.beatBpm, rec.beatBars).buffer;
+            }
+            if (!buffer) continue;
+            state.sequence.push({
+              kind: 'clip',
+              id: nextId++,
+              type: rec.type,
+              name: rec.name,
+              buffer,
+              fileData: rec.type === 'audio' ? rec.fileData : null,
+              fileType: rec.fileType,
+              beatType: rec.beatType,
+              beatBpm: rec.beatBpm,
+              beatBars: rec.beatBars,
+              start: rec.start,
+              end: rec.end,
+              volume: rec.volume,
+              fadeIn: rec.fadeIn,
+              fadeOut: rec.fadeOut,
+              crossfadeAfter: rec.crossfadeAfter,
+              bpm: rec.bpm,
+              beatOffset: rec.beatOffset,
+              beatTimes: rec.beatTimes || [],
+            });
+          } catch (err) {
+            console.warn('타임라인 구간 복원 실패', rec.name, err);
+          }
+        }
+      }
+    } else {
+      // 구버전 데이터(시퀀스 저장 이전)와의 호환: 트랙 순서 그대로 시퀀스로 채운다.
+      trackRecords.forEach((rec) => {
+        const trackId = idByTrackOrder[rec.order];
+        if (trackId != null) state.sequence.push({ kind: 'track', trackId });
+      });
     }
     updateEmptyState();
     renderTimeline();
@@ -1352,7 +1673,9 @@
     if (state.tracks.length === 0) return;
     showProgress('프로젝트 파일 만드는 중...');
     try {
-      const tracks = state.tracks.map(track => {
+      const trackOrderById = {};
+      const tracks = state.tracks.map((track, order) => {
+        trackOrderById[track.id] = order;
         const rec = {
           type: track.type,
           name: track.name,
@@ -1376,7 +1699,38 @@
         }
         return rec;
       });
-      const project = { formatVersion: 1, exportedAt: new Date().toISOString(), tracks };
+      // 타임라인 순서: kind:'track'은 곡 목록에서 몇 번째인지(trackOrder)로, kind:'clip'(목록에
+      // 카드 없는 독립 구간)은 자체 오디오까지 통째로 함께 저장 — 팀원이 열어도 그대로 재현된다.
+      const sequence = state.sequence.map(entry => {
+        if (entry.kind === 'track') {
+          if (!(entry.trackId in trackOrderById)) return null;
+          return { kind: 'track', trackOrder: trackOrderById[entry.trackId] };
+        }
+        const rec = {
+          kind: 'clip',
+          type: entry.type,
+          name: entry.name,
+          start: entry.start,
+          end: entry.end,
+          volume: entry.volume,
+          fadeIn: entry.fadeIn,
+          fadeOut: entry.fadeOut,
+          crossfadeAfter: entry.crossfadeAfter,
+          bpm: entry.bpm || null,
+          beatOffset: entry.beatOffset || 0,
+          beatTimes: entry.beatTimes || [],
+        };
+        if (entry.type === 'audio') {
+          rec.fileType = entry.fileType;
+          rec.fileDataBase64 = arrayBufferToBase64(entry.fileData);
+        } else if (entry.type === 'beat') {
+          rec.beatType = entry.beatType;
+          rec.beatBpm = entry.beatBpm;
+          rec.beatBars = entry.beatBars;
+        }
+        return rec;
+      }).filter(Boolean);
+      const project = { formatVersion: 2, exportedAt: new Date().toISOString(), tracks, sequence };
       const blob = new Blob([JSON.stringify(project)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -1411,12 +1765,15 @@
       );
       if (replace) {
         state.tracks = [];
+        state.sequence = [];
         trackList.innerHTML = '';
       }
 
       const ctx = getAudioCtx();
       let loaded = 0;
-      for (const rec of project.tracks) {
+      const idByImportOrder = {};
+      for (let i = 0; i < project.tracks.length; i++) {
+        const rec = project.tracks[i];
         let track;
         if (rec.type === 'audio' && rec.fileDataBase64) {
           const fileData = base64ToArrayBuffer(rec.fileDataBase64);
@@ -1453,9 +1810,60 @@
         } else {
           continue;
         }
+        idByImportOrder[i] = track.id;
         state.tracks.push(track);
         renderTrack(track);
         loaded++;
+      }
+      // 타임라인 순서 복원 (formatVersion 2+). 구버전 파일(sequence 없음)은 곡 목록 순서
+      // 그대로를 타임라인으로 쓴다 — 예전엔 둘이 항상 같았으므로 동작이 그대로 유지된다.
+      if (Array.isArray(project.sequence)) {
+        for (const rec of project.sequence) {
+          if (rec.kind === 'track') {
+            const trackId = idByImportOrder[rec.trackOrder];
+            if (trackId != null) state.sequence.push({ kind: 'track', trackId });
+          } else if (rec.kind === 'clip') {
+            try {
+              let buffer = null;
+              if (rec.type === 'audio' && rec.fileDataBase64) {
+                const fileData = base64ToArrayBuffer(rec.fileDataBase64);
+                buffer = await ctx.decodeAudioData(fileData.slice(0));
+                rec._fileData = fileData;
+              } else if (rec.type === 'beat' && rec.beatType) {
+                buffer = synthesizeBeat(rec.beatType, rec.beatBpm, rec.beatBars).buffer;
+              }
+              if (!buffer) continue;
+              state.sequence.push({
+                kind: 'clip',
+                id: nextId++,
+                type: rec.type,
+                name: rec.name,
+                buffer,
+                fileData: rec.type === 'audio' ? rec._fileData : null,
+                fileType: rec.fileType,
+                beatType: rec.beatType,
+                beatBpm: rec.beatBpm,
+                beatBars: rec.beatBars,
+                start: rec.start,
+                end: rec.end,
+                volume: rec.volume,
+                fadeIn: rec.fadeIn,
+                fadeOut: rec.fadeOut,
+                crossfadeAfter: rec.crossfadeAfter,
+                bpm: rec.bpm,
+                beatOffset: rec.beatOffset,
+                beatTimes: rec.beatTimes || [],
+              });
+            } catch (err) {
+              console.warn('타임라인 구간 복원 실패', rec.name, err);
+            }
+          }
+        }
+      } else {
+        project.tracks.forEach((rec, i) => {
+          const trackId = idByImportOrder[i];
+          if (trackId != null) state.sequence.push({ kind: 'track', trackId });
+        });
       }
       reorderTrackListDom();
       updateEmptyState();

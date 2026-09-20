@@ -112,6 +112,12 @@ main {
   padding: 14px;
 }
 
+/* Ctrl/Cmd+C, Ctrl/Cmd+V 단축키 대상으로 선택된 트랙 */
+.track-row.selected {
+  border-color: var(--accent-2);
+  box-shadow: 0 0 0 2px rgba(90, 200, 250, 0.3);
+}
+
 .track-head {
   display: flex;
   align-items: center;
@@ -599,6 +605,62 @@ body.has-clipboard .timeline-handle-edge::after {
   font-size: 13px;
   padding: 18px 0;
 }
+
+/* 목록에 카드가 없는, 복사해서 붙여넣은 독립 구간 — 점선 테두리로 구분 표시 */
+.timeline-clip-standalone {
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35) inset, 0 0 0 1px rgba(255, 255, 255, 0.5);
+  outline: 1px dashed rgba(255, 255, 255, 0.55);
+  outline-offset: -3px;
+}
+
+/* 독립 구간의 좌우 가장자리를 드래그해서 직접 자르거나 늘리는 손잡이 */
+.clip-trim-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+  /* 곡 사이의 크로스페이드 손잡이(.timeline-handle, z-index 4)가 정확히 같은 경계선
+     위에 겹칠 수 있어서, 이 손잡이를 늘 위로 오게 한다. */
+  z-index: 7;
+  touch-action: none;
+}
+.clip-trim-handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 3px;
+  height: 20px;
+  transform: translate(-50%, -50%);
+  background: rgba(7, 16, 24, 0.7);
+  border-radius: 2px;
+}
+.clip-trim-left { left: 0; }
+.clip-trim-right { right: 0; }
+
+/* 독립 구간 위에 뜨는 작은 복사/제거 버튼 */
+.clip-toolbar {
+  position: absolute;
+  top: 2px;
+  /* 오른쪽 트림 손잡이(폭 8px)와 안 겹치도록 살짝 띄워둔다 */
+  right: 11px;
+  z-index: 2;
+  display: flex;
+  gap: 3px;
+}
+.clip-tool-btn {
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 4px;
+  border: 1px solid rgba(7, 16, 24, 0.5);
+  background: rgba(255, 255, 255, 0.75);
+  color: #071018;
+  cursor: pointer;
+}
+.clip-tool-btn:hover { background: #fff; }
+.clip-tool-remove:hover { background: var(--danger, #ff5a5f); color: #fff; }
 
 .track-row.highlight {
   border-color: var(--accent-2);
