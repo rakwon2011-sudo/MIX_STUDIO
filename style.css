@@ -683,7 +683,9 @@ body.has-clipboard .timeline-handle-edge::after {
   top: 2px;
   /* 오른쪽 트림 손잡이(폭 8px)와 안 겹치도록 살짝 띄워둔다 */
   right: 11px;
-  z-index: 2;
+  /* 마우스를 얹으면 따라다니는 시간 표시(.timeline-cursor-label, z-index 6)가 이 버튼들
+     위를 덮어서 안 보이거나 못 누르겠다고 느껴질 수 있어서, 늘 그 위에 오게 한다. */
+  z-index: 9;
   display: flex;
   gap: 3px;
 }
