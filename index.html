@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MIX STUDIO</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>MIX STUDIO</h1>
+    <div class="topbar-actions">
+      <label class="btn btn-primary">
+        곡 추가
+        <input type="file" id="fileInput" accept="audio/*" multiple hidden>
+      </label>
+      <label class="btn">
+        영상 추가 (미리보기용)
+        <input type="file" id="videoInput" accept="video/*" hidden>
+      </label>
+      <button id="playBtn" class="btn" disabled>▶ 미리듣기</button>
+      <button id="stopBtn" class="btn" disabled>■ 정지</button>
+      <button id="exportBtn" class="btn btn-accent" disabled>내보내기 (WAV)</button>
+    </div>
+  </header>
+
+  <div id="status" class="status"></div>
+
+  <main>
+    <section id="videoSection" class="video-section hidden">
+      <h2>영상 미리보기</h2>
+      <video id="videoPreview" controls></video>
+      <label class="sync-toggle">
+        <input type="checkbox" id="syncVideoToggle" checked>
+        미리듣기 재생 시 영상도 같이 재생 (0초부터 동기화)
+      </label>
+      <p class="hint">최종 내보내기는 오디오(WAV)만 지원합니다. 영상은 타이밍 확인용입니다.</p>
+    </section>
+
+    <section class="beat-library">
+      <h2>기본 비트 라이브러리</h2>
+      <p class="hint">클릭하면 해당 비트가 트랙 목록 맨 끝에 곡처럼 추가됩니다. BPM을 먼저 정하고 추가하세요.</p>
+      <div class="beat-controls">
+        <label>BPM <input type="number" id="beatBpm" value="120" min="60" max="200"></label>
+        <label>길이(마디) <input type="number" id="beatBars" value="8" min="1" max="32"></label>
+      </div>
+      <div class="beat-buttons">
+        <button class="btn beat-add" data-beat="fourFloor">4-on-the-floor 킥</button>
+        <button class="btn beat-add" data-beat="hihat">하이햇 그루브</button>
+        <button class="btn beat-add" data-beat="clap">클랩 스네어</button>
+        <button class="btn beat-add" data-beat="full">킥+하이햇+클랩 풀비트</button>
+      </div>
+    </section>
+
+    <div id="emptyState" class="empty-state">
+      <p>위에서 "곡 추가"를 눌러 mp3/wav 파일을 올리거나, 비트 라이브러리에서 비트를 추가해보세요.</p>
+      <p class="hint">추가한 순서가 믹스 순서가 됩니다. 순서는 ▲▼ 버튼으로 바꿀 수 있습니다.</p>
+    </div>
+    <div id="trackList" class="track-list"></div>
+  </main>
+
+  <div id="progressOverlay" class="progress-overlay hidden">
+    <div class="progress-box">
+      <div id="progressText">처리 중...</div>
+    </div>
+  </div>
+
+  <template id="trackTemplate">
+    <div class="track-row">
+      <div class="track-head">
+        <span class="track-index"></span>
+        <button class="btn-move move-up" title="위로">▲</button>
+        <button class="btn-move move-down" title="아래로">▼</button>
+        <span class="track-name"></span>
+        <span class="track-bpm">BPM 분석 중...</span>
+        <button class="btn-remove" title="삭제">✕</button>
+      </div>
+      <div class="waveform-wrap">
+        <canvas class="waveform" width="1000" height="90"></canvas>
+        <div class="handle handle-start" title="드래그해서 시작점 조정"></div>
+        <div class="handle handle-end" title="드래그해서 끝점 조정"></div>
+        <div class="region-dim region-dim-left"></div>
+        <div class="region-dim region-dim-right"></div>
+      </div>
+      <div class="track-controls">
+        <label>시작 <input type="number" class="in-start" step="0.01" min="0"> 초
+          <button class="btn-snap snap-start">비트 스냅</button>
+        </label>
+        <label>끝 <input type="number" class="in-end" step="0.01" min="0"> 초
+          <button class="btn-snap snap-end">비트 스냅</button>
+        </label>
+        <label>페이드인 <input type="number" class="in-fadein" step="0.1" min="0" value="0"> 초</label>
+        <label>페이드아웃 <input type="number" class="in-fadeout" step="0.1" min="0" value="0"> 초</label>
+        <label>볼륨 <input type="range" class="in-volume" min="0" max="150" value="100"><span class="volume-value">100%</span></label>
+        <label class="crossfade-label">다음 곡과 크로스페이드
+          <input type="number" class="in-crossfade" step="0.1" min="0" value="2"> 초
+        </label>
+      </div>
+    </div>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>
