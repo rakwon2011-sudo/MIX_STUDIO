@@ -18,6 +18,11 @@
         영상 추가 (미리보기용)
         <input type="file" id="videoInput" accept="video/*" hidden>
       </label>
+      <button id="exportProjectBtn" class="btn" disabled title="지금 작업(곡+편집 내용)을 파일 하나로 저장해서 팀원과 공유">프로젝트 내보내기</button>
+      <label class="btn" title="팀원이 보낸 프로젝트 파일을 불러와서 똑같이 이어서 작업">
+        프로젝트 불러오기
+        <input type="file" id="importProjectInput" accept="application/json" hidden>
+      </label>
       <button id="pasteEndBtn" class="btn" disabled title="복사해둔 구간을 맨 끝에 붙여넣기">붙여넣기 (맨 끝에)</button>
       <button id="playBtn" class="btn" disabled>▶ 미리듣기</button>
       <button id="stopBtn" class="btn" disabled>■ 정지</button>

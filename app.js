@@ -35,6 +35,8 @@
   const beatBarsInput = document.getElementById('beatBars');
   const timelineTrackEl = document.getElementById('timelineTrack');
   const pasteEndBtn = document.getElementById('pasteEndBtn');
+  const exportProjectBtn = document.getElementById('exportProjectBtn');
+  const importProjectInput = document.getElementById('importProjectInput');
   const PX_PER_SEC = 40;
 
   function setStatus(msg) { statusEl.textContent = msg || ''; }
@@ -53,6 +55,7 @@
     const hasTracks = state.tracks.length > 0;
     playBtn.disabled = !hasTracks;
     exportBtn.disabled = !hasTracks;
+    exportProjectBtn.disabled = !hasTracks;
   }
 
   // ---------- File upload ----------
@@ -84,6 +87,8 @@
         type: 'audio',
         name: file.name,
         buffer: audioBuffer,
+        fileData: arrayBuffer,
+        fileType: file.type,
         start: 0,
         end: audioBuffer.duration,
         volume: 100,
@@ -97,6 +102,7 @@
       renderTrack(track);
       updateEmptyState();
       renderTimeline();
+      markDirty();
       setStatus(`${file.name} 추가됨`);
       detectBpm(track);
     } catch (err) {
@@ -134,6 +140,7 @@
       track.beatTimes = [];
       if (bpmEl) bpmEl.textContent = 'BPM 감지 실패 (수동 조정 가능)';
     }
+    markDirty();
   }
 
   // ---------- Beat library (synthesized loops, no external files) ----------
@@ -144,10 +151,14 @@
       const bars = parseInt(beatBarsInput.value, 10) || 8;
       const type = btn.dataset.beat;
       const track = synthesizeBeat(type, bpm, bars);
+      track.beatType = type;
+      track.beatBpm = bpm;
+      track.beatBars = bars;
       state.tracks.push(track);
       renderTrack(track);
       updateEmptyState();
       renderTimeline();
+      markDirty();
       setStatus(`${track.name} 추가됨`);
     });
   });
@@ -243,7 +254,7 @@
 
     const nameInput = row.querySelector('.track-name');
     nameInput.value = track.name;
-    nameInput.addEventListener('input', () => { track.name = nameInput.value; renderTimeline(); });
+    nameInput.addEventListener('input', () => { track.name = nameInput.value; renderTimeline(); markDirty(); });
     row.querySelector('.track-bpm').textContent = track.bpm ? `BPM ${track.bpm.toFixed(1)}` : 'BPM 분석 중...';
 
     const canvas = row.querySelector('.waveform');
@@ -288,6 +299,7 @@
       startInput.value = val.toFixed(2);
       positionHandles();
       renderTimeline();
+      markDirty();
     }
     function setEnd(val) {
       val = Math.min(track.buffer.duration, Math.max(val, track.start + 0.05));
@@ -295,19 +307,22 @@
       endInput.value = val.toFixed(2);
       positionHandles();
       renderTimeline();
+      markDirty();
     }
 
     startInput.addEventListener('input', () => setStart(parseFloat(startInput.value) || 0));
     endInput.addEventListener('input', () => setEnd(parseFloat(endInput.value) || track.buffer.duration));
-    fadeInInput.addEventListener('input', () => { track.fadeIn = parseFloat(fadeInInput.value) || 0; });
-    fadeOutInput.addEventListener('input', () => { track.fadeOut = parseFloat(fadeOutInput.value) || 0; });
+    fadeInInput.addEventListener('input', () => { track.fadeIn = parseFloat(fadeInInput.value) || 0; markDirty(); });
+    fadeOutInput.addEventListener('input', () => { track.fadeOut = parseFloat(fadeOutInput.value) || 0; markDirty(); });
     volumeInput.addEventListener('input', () => {
       track.volume = parseFloat(volumeInput.value);
       volumeValue.textContent = track.volume + '%';
+      markDirty();
     });
     crossfadeInput.addEventListener('input', () => {
       track.crossfadeAfter = Math.max(0, parseFloat(crossfadeInput.value) || 0);
       renderTimeline();
+      markDirty();
     });
 
     row.querySelector('.snap-start').addEventListener('click', () => {
@@ -345,6 +360,7 @@
       updateEmptyState();
       renumberTracks();
       renderTimeline();
+      markDirty();
     });
 
     row.querySelector('.move-up').addEventListener('click', () => moveTrack(track.id, -1));
@@ -365,6 +381,11 @@
         bpm: track.bpm,
         beatOffset: track.beatOffset,
         beatTimes: track.beatTimes,
+        fileData: track.fileData,
+        fileType: track.fileType,
+        beatType: track.beatType,
+        beatBpm: track.beatBpm,
+        beatBars: track.beatBars,
       };
       refreshPasteButtons();
       setStatus(`${track.name} 구간 (${(track.end - track.start).toFixed(1)}초) 복사됨 — 원하는 곡 옆 "붙여넣기"를 누르세요`);
@@ -436,6 +457,7 @@
     state.tracks.splice(newIdx, 0, t);
     reorderTrackListDom();
     renderTimeline();
+    markDirty();
   }
 
   function reorderTrackListDom() {
@@ -465,6 +487,7 @@
     renderTrack(newTrack);
     reorderTrackListDom();
     renderTimeline();
+    markDirty();
     setStatus(`${track.name} 구간 복제됨 — 새 구간을 조정하세요`);
   }
 
@@ -492,12 +515,18 @@
       bpm: c.bpm,
       beatOffset: c.beatOffset,
       beatTimes: c.beatTimes || [],
+      fileData: c.fileData,
+      fileType: c.fileType,
+      beatType: c.beatType,
+      beatBpm: c.beatBpm,
+      beatBars: c.beatBars,
     };
     state.tracks.splice(index, 0, newTrack);
     renderTrack(newTrack);
     reorderTrackListDom();
     updateEmptyState();
     renderTimeline();
+    markDirty();
     setStatus(`${c.name} 구간이 붙여넣기됨`);
   }
 
@@ -629,6 +658,7 @@
             const [t] = state.tracks.splice(curIdx, 1);
             state.tracks.splice(targetIndex, 0, t);
             reorderTrackListDom();
+            markDirty();
           }
           renderTimeline();
         } else {
@@ -663,6 +693,7 @@
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
         renderTimeline();
+        markDirty();
       };
       window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerup', onUp);
@@ -837,6 +868,288 @@
     return new Blob([arrayBuffer], { type: 'audio/wav' });
   }
 
+  // ---------- Persistence (IndexedDB) ----------
+  // Keeps uploaded songs and every edit (trim points, fades, volume, order,
+  // crossfades) so a page refresh doesn't wipe out the work. Everything stays
+  // in this browser only — nothing is uploaded anywhere.
+  const DB_NAME = 'mixstudio-db';
+  const STORE_NAME = 'tracks';
+  let dbPromise = null;
+
+  function openDb() {
+    if (!window.indexedDB) return Promise.resolve(null);
+    if (dbPromise) return dbPromise;
+    dbPromise = new Promise((resolve) => {
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(STORE_NAME)) {
+          db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => { console.warn('저장 공간 열기 실패', req.error); resolve(null); };
+    });
+    return dbPromise;
+  }
+
+  let persistTimer = null;
+  function markDirty() {
+    clearTimeout(persistTimer);
+    persistTimer = setTimeout(persistTracks, 500);
+  }
+
+  async function persistTracks() {
+    const db = await openDb();
+    if (!db) return;
+    try {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+      store.clear();
+      state.tracks.forEach((track, order) => {
+        store.put({
+          id: track.id,
+          order,
+          type: track.type,
+          name: track.name,
+          start: track.start,
+          end: track.end,
+          volume: track.volume,
+          fadeIn: track.fadeIn,
+          fadeOut: track.fadeOut,
+          crossfadeAfter: track.crossfadeAfter,
+          bpm: track.bpm || null,
+          beatOffset: track.beatOffset || 0,
+          beatTimes: track.beatTimes || [],
+          fileData: track.type === 'audio' ? track.fileData : null,
+          fileType: track.type === 'audio' ? track.fileType : null,
+          beatType: track.type === 'beat' ? track.beatType : null,
+          beatBpm: track.type === 'beat' ? track.beatBpm : null,
+          beatBars: track.type === 'beat' ? track.beatBars : null,
+        });
+      });
+      await new Promise((resolve) => { tx.oncomplete = resolve; tx.onerror = resolve; });
+    } catch (err) {
+      console.warn('자동 저장 실패', err);
+    }
+  }
+
+  async function loadPersistedTracks() {
+    const db = await openDb();
+    if (!db) return;
+    let records = [];
+    try {
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const store = tx.objectStore(STORE_NAME);
+      records = await new Promise((resolve, reject) => {
+        const req = store.getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => reject(req.error);
+      });
+    } catch (err) {
+      console.warn('이전 작업 불러오기 실패', err);
+      return;
+    }
+    if (!records.length) return;
+    records.sort((a, b) => a.order - b.order);
+    showProgress('이전에 저장된 곡 불러오는 중...');
+    const ctx = getAudioCtx();
+    let loaded = 0;
+    for (const rec of records) {
+      try {
+        let track;
+        if (rec.type === 'audio' && rec.fileData) {
+          const buffer = await ctx.decodeAudioData(rec.fileData.slice(0));
+          track = {
+            id: nextId++,
+            type: 'audio',
+            name: rec.name,
+            buffer,
+            fileData: rec.fileData,
+            fileType: rec.fileType,
+            start: rec.start,
+            end: rec.end,
+            volume: rec.volume,
+            fadeIn: rec.fadeIn,
+            fadeOut: rec.fadeOut,
+            crossfadeAfter: rec.crossfadeAfter,
+            bpm: rec.bpm,
+            beatOffset: rec.beatOffset,
+            beatTimes: rec.beatTimes || [],
+          };
+        } else if (rec.type === 'beat' && rec.beatType) {
+          track = synthesizeBeat(rec.beatType, rec.beatBpm, rec.beatBars);
+          track.beatType = rec.beatType;
+          track.beatBpm = rec.beatBpm;
+          track.beatBars = rec.beatBars;
+          track.name = rec.name;
+          track.start = rec.start;
+          track.end = rec.end;
+          track.volume = rec.volume;
+          track.fadeIn = rec.fadeIn;
+          track.fadeOut = rec.fadeOut;
+          track.crossfadeAfter = rec.crossfadeAfter;
+        } else {
+          continue;
+        }
+        state.tracks.push(track);
+        renderTrack(track);
+        loaded++;
+      } catch (err) {
+        console.warn('트랙 복원 실패', rec.name, err);
+      }
+    }
+    updateEmptyState();
+    renderTimeline();
+    hideProgress();
+    if (loaded) setStatus(`이전에 저장된 곡 ${loaded}개를 불러왔습니다`);
+  }
+
+  // ---------- Project export / import (share the whole edit with a teammate) ----------
+  // GitHub Pages has no server, so there's no live shared workspace. Instead, the
+  // whole project (songs + every cut/fade/volume/order) is packed into one JSON
+  // file (audio embedded as base64) that a teammate can open in their own copy
+  // of MIX STUDIO to continue from the exact same state.
+  function arrayBufferToBase64(buffer) {
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+  }
+
+  function base64ToArrayBuffer(base64) {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes.buffer;
+  }
+
+  exportProjectBtn.addEventListener('click', async () => {
+    if (state.tracks.length === 0) return;
+    showProgress('프로젝트 파일 만드는 중...');
+    try {
+      const tracks = state.tracks.map(track => {
+        const rec = {
+          type: track.type,
+          name: track.name,
+          start: track.start,
+          end: track.end,
+          volume: track.volume,
+          fadeIn: track.fadeIn,
+          fadeOut: track.fadeOut,
+          crossfadeAfter: track.crossfadeAfter,
+          bpm: track.bpm || null,
+          beatOffset: track.beatOffset || 0,
+          beatTimes: track.beatTimes || [],
+        };
+        if (track.type === 'audio') {
+          rec.fileType = track.fileType;
+          rec.fileDataBase64 = arrayBufferToBase64(track.fileData);
+        } else if (track.type === 'beat') {
+          rec.beatType = track.beatType;
+          rec.beatBpm = track.beatBpm;
+          rec.beatBars = track.beatBars;
+        }
+        return rec;
+      });
+      const project = { formatVersion: 1, exportedAt: new Date().toISOString(), tracks };
+      const blob = new Blob([JSON.stringify(project)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+      a.download = `mixstudio-project-${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setStatus('프로젝트 파일 내보내기 완료 — 이 파일을 공유하면 됩니다');
+    } catch (err) {
+      console.error(err);
+      setStatus('프로젝트 내보내기 실패: ' + err.message);
+    } finally {
+      hideProgress();
+    }
+  });
+
+  importProjectInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    importProjectInput.value = '';
+    if (!file) return;
+    showProgress('프로젝트 파일 불러오는 중...');
+    try {
+      const text = await file.text();
+      const project = JSON.parse(text);
+      if (!project || !Array.isArray(project.tracks)) throw new Error('올바른 프로젝트 파일이 아닙니다');
+
+      const replace = state.tracks.length === 0 || confirm(
+        '현재 작업 중인 곡들을 지우고 이 프로젝트로 교체할까요?\n' +
+        '"취소"를 누르면 지금 목록 뒤에 이어서 추가됩니다.'
+      );
+      if (replace) {
+        state.tracks = [];
+        trackList.innerHTML = '';
+      }
+
+      const ctx = getAudioCtx();
+      let loaded = 0;
+      for (const rec of project.tracks) {
+        let track;
+        if (rec.type === 'audio' && rec.fileDataBase64) {
+          const fileData = base64ToArrayBuffer(rec.fileDataBase64);
+          const buffer = await ctx.decodeAudioData(fileData.slice(0));
+          track = {
+            id: nextId++,
+            type: 'audio',
+            name: rec.name,
+            buffer,
+            fileData,
+            fileType: rec.fileType,
+            start: rec.start,
+            end: rec.end,
+            volume: rec.volume,
+            fadeIn: rec.fadeIn,
+            fadeOut: rec.fadeOut,
+            crossfadeAfter: rec.crossfadeAfter,
+            bpm: rec.bpm,
+            beatOffset: rec.beatOffset,
+            beatTimes: rec.beatTimes || [],
+          };
+        } else if (rec.type === 'beat' && rec.beatType) {
+          track = synthesizeBeat(rec.beatType, rec.beatBpm, rec.beatBars);
+          track.beatType = rec.beatType;
+          track.beatBpm = rec.beatBpm;
+          track.beatBars = rec.beatBars;
+          track.name = rec.name;
+          track.start = rec.start;
+          track.end = rec.end;
+          track.volume = rec.volume;
+          track.fadeIn = rec.fadeIn;
+          track.fadeOut = rec.fadeOut;
+          track.crossfadeAfter = rec.crossfadeAfter;
+        } else {
+          continue;
+        }
+        state.tracks.push(track);
+        renderTrack(track);
+        loaded++;
+      }
+      reorderTrackListDom();
+      updateEmptyState();
+      renderTimeline();
+      markDirty();
+      setStatus(`프로젝트에서 곡 ${loaded}개를 불러왔습니다`);
+    } catch (err) {
+      console.error(err);
+      setStatus('프로젝트 불러오기 실패: ' + err.message);
+    } finally {
+      hideProgress();
+    }
+  });
+
   renderTimeline();
   setStatus('브라우저 안에서만 작동합니다. 파일은 어디로도 업로드되지 않습니다.');
+  loadPersistedTracks();
 })();
