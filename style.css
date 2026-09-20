@@ -274,6 +274,19 @@ main {
   z-index: 3;
 }
 
+/* 이미 재생된 구간을 그림자로 채워서, 지금까지 얼마나 들었는지 한눈에 보이게 함 */
+.wave-progress {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 0%;
+  background: rgba(74, 222, 128, 0.18);
+  pointer-events: none;
+  display: none;
+  z-index: 2;
+}
+
 /* 재생 중 현재 위치 표시선 (마우스를 따라다니는 wave-cursor와 별개, 실제 재생 진행에 맞춰 움직임) */
 .wave-playhead {
   position: absolute;

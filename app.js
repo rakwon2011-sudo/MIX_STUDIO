@@ -299,7 +299,10 @@
     wrap.appendChild(waveCursor);
     wrap.appendChild(waveCursorLabel);
 
-    // 이 곡이 재생될 때 실제 재생 위치를 보여주는 선 (미리듣기 진행 상황 표시용)
+    // 이 곡이 재생될 때 이미 재생된 구간을 그림자로 채우고, 현재 위치에 선을 그어준다
+    const waveProgress = document.createElement('div');
+    waveProgress.className = 'wave-progress';
+    wrap.appendChild(waveProgress);
     const wavePlayhead = document.createElement('div');
     wavePlayhead.className = 'wave-playhead';
     wrap.appendChild(wavePlayhead);
@@ -785,32 +788,48 @@
 
   function clearAllRowPlayheads() {
     trackList.querySelectorAll('.wave-playhead').forEach(el => { el.style.display = 'none'; });
+    trackList.querySelectorAll('.wave-progress').forEach(el => { el.style.display = 'none'; el.style.width = '0%'; });
   }
 
-  // 믹스 전체 재생 중: 타임라인을 가로지르는 선 + 각 클립이 재생된 만큼 그림자 채우기
+  // 믹스 전체 재생 중: 타임라인을 가로지르는 선 + 각 클립이 재생된 만큼 그림자 채우기.
+  // 동시에 지금 재생 중인 곡의 트랙 목록 파형 바에도 같은 재생 위치를 반영한다.
   function updateTimelineProgressForItems(items, elapsed) {
     timelinePlayhead.style.display = 'block';
     timelinePlayhead.style.left = (elapsed * PX_PER_SEC) + 'px';
     items.forEach(item => {
       const clip = timelineTrackEl.querySelector(`.timeline-clip[data-id="${item.track.id}"]`);
-      if (!clip) return;
-      const progressEl = clip.querySelector('.timeline-clip-progress');
       const local = elapsed - item.timelineStart;
-      let pct = 0;
-      if (local <= 0) pct = 0;
-      else if (local >= item.clipDuration) pct = 100;
-      else pct = (local / item.clipDuration) * 100;
-      if (progressEl) progressEl.style.width = pct + '%';
-      clip.classList.toggle('playing', local > 0 && local < item.clipDuration);
+      const playing = local > 0 && local < item.clipDuration;
+      if (clip) {
+        const progressEl = clip.querySelector('.timeline-clip-progress');
+        let pct = 0;
+        if (local <= 0) pct = 0;
+        else if (local >= item.clipDuration) pct = 100;
+        else pct = (local / item.clipDuration) * 100;
+        if (progressEl) progressEl.style.width = pct + '%';
+        clip.classList.toggle('playing', playing);
+      }
+      // 트랙 전체 버퍼 기준 위치로 환산해서 파형 바에도 표시
+      const absoluteTime = item.track.start + Math.max(0, Math.min(local, item.clipDuration));
+      const fraction = absoluteTime / item.track.buffer.duration;
+      setRowPlayhead(item.track, fraction, playing);
     });
   }
 
+  // fraction: 트랙 전체 버퍼(0~buffer.duration) 기준 현재 재생 위치 비율(0~1)
   function setRowPlayhead(track, fraction, visible) {
-    const wavePlayhead = trackList.querySelector(`[data-id="${track.id}"] .wave-playhead`);
-    if (!wavePlayhead) return;
-    if (!visible) { wavePlayhead.style.display = 'none'; return; }
-    wavePlayhead.style.left = (Math.max(0, Math.min(1, fraction)) * 100) + '%';
-    wavePlayhead.style.display = 'block';
+    const row = trackList.querySelector(`[data-id="${track.id}"]`);
+    if (!row) return;
+    const wavePlayhead = row.querySelector('.wave-playhead');
+    const waveProgress = row.querySelector('.wave-progress');
+    if (!visible) {
+      if (wavePlayhead) wavePlayhead.style.display = 'none';
+      if (waveProgress) waveProgress.style.display = 'none';
+      return;
+    }
+    const pct = (Math.max(0, Math.min(1, fraction)) * 100) + '%';
+    if (wavePlayhead) { wavePlayhead.style.left = pct; wavePlayhead.style.display = 'block'; }
+    if (waveProgress) { waveProgress.style.width = pct; waveProgress.style.display = 'block'; }
   }
 
   function makeClipDraggable(clip, track) {
@@ -1033,15 +1052,17 @@
     setStatus(`${track.name} 미리듣기 중... (${formatTime(startAt)}부터)`);
 
     // 이 곡 하나만 미리듣는 중에도 파형 위 재생선 + 타임라인의 해당 클립 진행 표시를 함께 움직인다.
-    const fullRange = Math.max(0.001, track.end - track.start);
+    const bufferDuration = Math.max(0.001, track.buffer.duration);
     const seekOffset = startAt - track.start;
     const { items: fullItems } = computeTimeline();
     const matchedItem = fullItems.find(it => it.track.id === track.id);
 
     startProgressAnim(ctx, startCtxTime, clipDuration, (elapsed) => {
-      const playedFraction = (seekOffset + elapsed) / fullRange;
-      setRowPlayhead(track, playedFraction, true);
+      // 파형 바는 트랙 전체 버퍼(0~duration) 기준, 클립 구간(clipDuration) 기준이 아니다
+      const bufferFraction = (startAt + elapsed) / bufferDuration;
+      setRowPlayhead(track, bufferFraction, true);
       if (matchedItem) {
+        const playedFraction = matchedItem.clipDuration > 0 ? (seekOffset + elapsed) / matchedItem.clipDuration : 0;
         timelinePlayhead.style.display = 'block';
         timelinePlayhead.style.left = ((matchedItem.timelineStart + seekOffset + elapsed) * PX_PER_SEC) + 'px';
         const clip = timelineTrackEl.querySelector(`.timeline-clip[data-id="${track.id}"]`);
