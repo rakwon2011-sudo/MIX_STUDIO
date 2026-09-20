@@ -72,9 +72,10 @@
         </div>
       </div>
       <p class="hint">곡 블록을 좌우로 드래그하면 순서가 바뀌고, 블록 사이의 ↔ 손잡이를 드래그하면 크로스페이드(겹침)가 조정됩니다. 아래 목록에서 "복사"를 누른 뒤, 타임라인의 곡 사이 손잡이(초록 ➕로 바뀜)를 클릭하면 그 자리에 바로 붙여넣을 수 있습니다 (점선 테두리로 표시됨). 구간 자르기·비트 스냅·볼륨 같은 세부 편집은 아래 목록에서 합니다. 파형이 잘 안 보이면 오른쪽 위 ＋／－로 확대·축소하세요.</p>
-      <div class="timeline-scroll">
+      <div class="timeline-scroll" id="timelineScroll">
         <div class="timeline-track" id="timelineTrack"></div>
       </div>
+      <div class="custom-hscroll" id="timelineHScroll" title="드래그해서 좌우로 이동"><div class="custom-hscroll-thumb"></div></div>
     </section>
 
     <div id="emptyState" class="empty-state">
@@ -118,6 +119,7 @@
           <div class="region-dim region-dim-right"></div>
         </div>
       </div>
+      <div class="custom-hscroll row-hscroll" title="드래그해서 좌우로 이동"><div class="custom-hscroll-thumb"></div></div>
       <div class="track-controls">
         <label>시작 <input type="number" class="in-start" step="0.01" min="0"> 초
           <button class="btn-snap snap-start">비트 스냅</button>

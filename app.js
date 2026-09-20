@@ -48,10 +48,78 @@
   const zoomInBtn = document.getElementById('zoomInBtn');
   const zoomOutBtn = document.getElementById('zoomOutBtn');
   const zoomLevelLabel = document.getElementById('zoomLevelLabel');
+  const timelineScrollEl = document.getElementById('timelineScroll');
+  const timelineHScrollEl = document.getElementById('timelineHScroll');
   const PX_PER_SEC_DEFAULT = 40;
   const PX_PER_SEC_MIN = 10;
   const PX_PER_SEC_MAX = 240;
   let PX_PER_SEC = PX_PER_SEC_DEFAULT; // 타임라인 확대/축소 배율 — 초당 픽셀 수. 값이 클수록 파형이 넓게, 세밀하게 보임.
+
+  // ---------- 항상 보이는 이동 막대 (맥 기본 스크롤바는 트랙패드로 움직일 때만 잠깐 보여서,
+  // 대신 마우스로 바로 잡고 끄는 우리만의 막대를 만든다 — 타임라인과 각 곡 파형 둘 다 사용) ----------
+  // scrollEl: 실제로 좌우 스크롤되는 요소. barEl: `.custom-hscroll` 막대 DOM.
+  // 반환값(refresh 함수)을 내용이 바뀔 때(확대/축소, 다시 그리기 등) 호출해서 막대 크기/위치를 갱신한다.
+  function setupHScrollbar(scrollEl, barEl) {
+    const thumb = barEl.querySelector('.custom-hscroll-thumb');
+
+    function refresh() {
+      const trackWidth = barEl.clientWidth;
+      const maxScroll = Math.max(0, scrollEl.scrollWidth - scrollEl.clientWidth);
+      const ratio = scrollEl.scrollWidth > 0 ? Math.min(1, scrollEl.clientWidth / scrollEl.scrollWidth) : 1;
+      const thumbWidth = Math.max(24, trackWidth * ratio);
+      const maxThumbLeft = Math.max(0, trackWidth - thumbWidth);
+      const scrollRatio = maxScroll > 0 ? scrollEl.scrollLeft / maxScroll : 0;
+      thumb.style.width = thumbWidth + 'px';
+      thumb.style.left = (scrollRatio * maxThumbLeft) + 'px';
+    }
+
+    scrollEl.addEventListener('scroll', refresh);
+
+    thumb.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      thumb.setPointerCapture(e.pointerId);
+      const startX = e.clientX;
+      const startScrollLeft = scrollEl.scrollLeft;
+      const trackWidth = barEl.clientWidth;
+      const thumbWidth = thumb.clientWidth;
+      const maxThumbLeft = Math.max(0, trackWidth - thumbWidth);
+      const maxScroll = Math.max(0, scrollEl.scrollWidth - scrollEl.clientWidth);
+      const startThumbLeft = maxThumbLeft > 0 ? (startScrollLeft / (maxScroll || 1)) * maxThumbLeft : 0;
+      const onMove = (ev) => {
+        const dx = ev.clientX - startX;
+        const thumbLeft = Math.max(0, Math.min(maxThumbLeft, startThumbLeft + dx));
+        scrollEl.scrollLeft = maxThumbLeft > 0 ? (thumbLeft / maxThumbLeft) * maxScroll : 0;
+      };
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    });
+
+    // 막대의 빈 부분(손잡이가 아닌 곳)을 클릭하면 그 위치로 바로 이동
+    barEl.addEventListener('pointerdown', (e) => {
+      if (e.target === thumb) return;
+      const rect = barEl.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const trackWidth = barEl.clientWidth;
+      const thumbWidth = thumb.clientWidth;
+      const maxThumbLeft = Math.max(0, trackWidth - thumbWidth);
+      const maxScroll = Math.max(0, scrollEl.scrollWidth - scrollEl.clientWidth);
+      const targetThumbLeft = Math.max(0, Math.min(maxThumbLeft, x - thumbWidth / 2));
+      scrollEl.scrollLeft = maxThumbLeft > 0 ? (targetThumbLeft / maxThumbLeft) * maxScroll : 0;
+    });
+
+    refresh();
+    return refresh;
+  }
+
+  const refreshTimelineHScroll = (timelineScrollEl && timelineHScrollEl)
+    ? setupHScrollbar(timelineScrollEl, timelineHScrollEl)
+    : () => {};
+  window.addEventListener('resize', () => refreshTimelineHScroll());
 
   function setStatus(msg) { statusEl.textContent = msg || ''; }
   function showProgress(msg) { progressText.textContent = msg; progressOverlay.classList.remove('hidden'); }
@@ -311,8 +379,10 @@
     const rowZoomIn = row.querySelector('.row-zoom-in');
     const rowZoomOut = row.querySelector('.row-zoom-out');
     const rowZoomLevel = row.querySelector('.row-zoom-level');
+    const rowHScrollEl = row.querySelector('.row-hscroll');
     const ROW_ZOOM_MIN = 1;
     const ROW_ZOOM_MAX = 20;
+    const refreshRowHScroll = rowHScrollEl ? setupHScrollbar(wrap, rowHScrollEl) : () => {};
 
     // 마우스를 파형 위에 올리면 세로선 커서 + 시간 표시가 따라다님
     const waveCursor = document.createElement('div');
@@ -384,6 +454,7 @@
       if (rowZoomLevel) rowZoomLevel.textContent = Math.round(track.zoom * 100) + '%';
       if (rowZoomOut) rowZoomOut.disabled = track.zoom <= ROW_ZOOM_MIN;
       if (rowZoomIn) rowZoomIn.disabled = track.zoom >= ROW_ZOOM_MAX;
+      refreshRowHScroll();
     }
     if (rowZoomIn) rowZoomIn.addEventListener('click', () => {
       track.zoom = Math.min(ROW_ZOOM_MAX, track.zoom * 1.6);
@@ -874,6 +945,7 @@
       empty.className = 'timeline-empty';
       empty.textContent = '곡을 추가하면 여기에 타임라인이 표시됩니다.';
       timelineTrackEl.appendChild(empty);
+      refreshTimelineHScroll();
       return;
     }
     const widthPx = Math.max(totalDuration * PX_PER_SEC, 200);
@@ -974,6 +1046,7 @@
     timelineTrackEl.appendChild(timelineCursor);
     timelineTrackEl.appendChild(timelineCursorLabel);
     timelineTrackEl.appendChild(timelinePlayhead);
+    refreshTimelineHScroll();
   }
 
   // ---------- Playback progress indicator (playhead + played-shadow on clips) ----------
