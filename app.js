@@ -922,6 +922,18 @@
       timelineCursorLabel.style.display = 'block';
     });
     timelineTrackEl.addEventListener('mouseleave', hideTimelineCursor);
+
+    // 곡 블록이 없는 빈 여백(맨 끝 등)을 클릭해도 그 지점부터 이어서 재생.
+    // 곡 블록/손잡이/버튼 클릭은 각자의 클릭 핸들러가 처리하므로 여기서는 제외.
+    timelineTrackEl.addEventListener('click', (e) => {
+      if (e.target.closest('.timeline-clip, .timeline-handle, .clip-toolbar, .clip-trim-handle')) return;
+      const { items } = computeTimeline();
+      if (items.length === 0) return;
+      const rect = timelineTrackEl.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      if (x < 0) return;
+      playMixFrom(x / PX_PER_SEC);
+    });
   }
 
   // ---------- Timeline zoom (파형을 세밀하게 보려고 늘리거나, 전체를 보려고 줄이기) ----------
@@ -1170,15 +1182,12 @@
           }
           renderTimeline();
         } else {
-          // 드래그 없이 클릭만 한 경우: 클릭한 지점부터 바로 재생 (+ 목록 카드가 있으면 강조)
+          // 드래그 없이 클릭만 한 경우: 이 곡만 미리듣는 게 아니라, 클릭한 지점부터
+          // 타임라인 전체를 이어서 재생한다 (다음 곡과의 연결부를 바로 들어보기 위함).
           const ratio = clipRect.width > 0 ? clickOffsetX / clipRect.width : 0;
-          const fromTime = item.start + ratio * (item.end - item.start);
-          if (item.kind === 'track') {
-            playFromOffset(item.track, fromTime);
-            highlightTrackRow(item.track.id);
-          } else {
-            playClipPreview(item, fromTime);
-          }
+          const fromTime = item.timelineStart + ratio * item.clipDuration;
+          playMixFrom(fromTime);
+          if (item.kind === 'track') highlightTrackRow(item.track.id);
         }
       };
       window.addEventListener('pointermove', onMove);
@@ -1320,22 +1329,37 @@
   }
 
   // ---------- Preview playback ----------
-  async function playMix() {
+  // startOffset: 타임라인 전체 기준(초)에서 재생을 시작할 지점. 0이면 처음부터(기존 동작과 동일),
+  // 0보다 크면 그 지점부터 이어지는 곡들을 그대로 붙여서 재생한다 (곡 연결부만 골라 들을 때 사용).
+  async function playMixFrom(startOffset) {
     const ctx = getAudioCtx();
     await ctx.resume();
     stopPreview();
     stopTrackPreview();
-    const { items, totalDuration } = computeTimeline();
-    if (items.length === 0) return;
+    const { items: allItems, totalDuration } = computeTimeline();
+    if (allItems.length === 0) return;
+    const offset = Math.max(0, Math.min(startOffset || 0, Math.max(0, totalDuration - 0.05)));
+    const isSeek = offset > 0.01;
 
     const baseTime = ctx.currentTime + 0.1;
-    for (const item of items) {
-      const src = scheduleTrack(ctx, ctx.destination, item, baseTime + item.timelineStart);
+    for (const item of allItems) {
+      const itemTimelineEnd = item.timelineStart + item.clipDuration;
+      if (itemTimelineEnd <= offset) continue; // 시작 지점보다 앞서 끝나는 곡은 건너뜀
+      const trimmed = item.timelineStart < offset;
+      const scheduleItem = trimmed
+        ? Object.assign({}, item, {
+            start: item.start + (offset - item.timelineStart),
+            clipDuration: itemTimelineEnd - offset,
+            fadeIn: 0, // 곡 중간부터 시작하는 경우 원래의 페이드인은 생략
+          })
+        : item;
+      const when = baseTime + Math.max(0, item.timelineStart - offset);
+      const src = scheduleTrack(ctx, ctx.destination, scheduleItem, when);
       state.activeSources.push(src);
     }
 
     if (syncVideoToggle.checked && state.videoFile) {
-      videoPreview.currentTime = 0;
+      videoPreview.currentTime = offset;
       videoPreview.play().catch(() => {});
     }
 
@@ -1343,10 +1367,13 @@
     timelinePlayBtn.disabled = true;
     stopBtn.disabled = false;
     timelineStopBtn.disabled = false;
-    setStatus(`재생 중... 총 ${totalDuration.toFixed(1)}초`);
+    const remaining = Math.max(0.05, totalDuration - offset);
+    setStatus(isSeek
+      ? `재생 중... (${formatTime(offset)}부터, 총 ${totalDuration.toFixed(1)}초)`
+      : `재생 중... 총 ${totalDuration.toFixed(1)}초`);
 
-    startProgressAnim(ctx, baseTime, totalDuration, (elapsed) => {
-      updateTimelineProgressForItems(items, elapsed);
+    startProgressAnim(ctx, baseTime, remaining, (elapsed) => {
+      updateTimelineProgressForItems(allItems, elapsed + offset);
     }, () => {
       clearTimelineProgress();
     });
@@ -1357,8 +1384,12 @@
       stopBtn.disabled = true;
       timelineStopBtn.disabled = true;
       setStatus('재생 완료');
-    }, totalDuration * 1000 + 200);
+    }, remaining * 1000 + 200);
     state.activeSources.push({ stop: () => clearTimeout(endTimer) });
+  }
+
+  function playMix() {
+    return playMixFrom(0);
   }
 
   playBtn.addEventListener('click', playMix);
