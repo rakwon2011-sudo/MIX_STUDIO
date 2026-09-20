@@ -566,6 +566,34 @@ main {
   padding: 1px 3px;
 }
 
+/* 타임라인 맨 앞의 삽입 지점 (크로스페이드 손잡이와 달리 드래그는 없음) */
+.timeline-handle-edge {
+  margin-left: 0;
+  cursor: default;
+}
+
+.timeline-handle-edge::after {
+  content: "\2795";
+  opacity: 0;
+}
+
+/* 복사해둔 구간이 있을 때: 곡 사이 손잡이가 붙여넣기 지점이라는 걸 알려줌 */
+body.has-clipboard .timeline-handle {
+  cursor: pointer;
+}
+
+body.has-clipboard .timeline-handle::after {
+  content: "\2795";
+  color: #06210f;
+  background: var(--ok);
+  border-color: var(--ok);
+  box-shadow: 0 0 6px rgba(74, 222, 128, 0.7);
+}
+
+body.has-clipboard .timeline-handle-edge::after {
+  opacity: 1;
+}
+
 .timeline-empty {
   color: var(--text-dim);
   font-size: 13px;

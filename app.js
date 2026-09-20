@@ -536,6 +536,8 @@
     const hasClip = !!state.clipboard;
     document.querySelectorAll('.btn-paste').forEach(btn => { btn.disabled = !hasClip; });
     pasteEndBtn.disabled = !hasClip;
+    // 타임라인의 곡 사이 손잡이도 붙여넣기 지점으로 쓸 수 있다는 걸 색으로 알려줌
+    document.body.classList.toggle('has-clipboard', hasClip);
   }
 
   function pasteClipboardAt(index) {
@@ -742,11 +744,17 @@
         const handle = document.createElement('div');
         handle.className = 'timeline-handle';
         handle.style.left = (nextItem.timelineStart * PX_PER_SEC) + 'px';
-        handle.title = '드래그해서 크로스페이드 조정';
         timelineTrackEl.appendChild(handle);
-        makeCrossfadeHandleDraggable(handle, item.track, item, nextItem);
+        makeCrossfadeHandleDraggable(handle, item.track, item, nextItem, nextItem.track.id);
       }
     });
+
+    // 맨 앞 삽입 지점: 복사해둔 구간이 있을 때, 첫 곡 앞에 바로 붙여넣을 수 있음
+    const leadHandle = document.createElement('div');
+    leadHandle.className = 'timeline-handle timeline-handle-edge';
+    leadHandle.style.left = '0px';
+    timelineTrackEl.appendChild(leadHandle);
+    makePasteOnlyHandle(leadHandle, 0);
 
     timelineTrackEl.appendChild(timelineCursor);
     timelineTrackEl.appendChild(timelineCursorLabel);
@@ -883,7 +891,9 @@
     });
   }
 
-  function makeCrossfadeHandleDraggable(handle, track, item, nextItem) {
+  // 곡과 곡 사이의 손잡이: 드래그하면 크로스페이드 조정, 드래그 없이 클릭만 하면
+  // (복사해둔 구간이 있을 때) 바로 그 지점에 붙여넣기.
+  function makeCrossfadeHandleDraggable(handle, track, item, nextItem, insertBeforeTrackId) {
     handle.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -891,8 +901,10 @@
       const startX = e.clientX;
       const startCrossfade = track.crossfadeAfter || 0;
       const maxCrossfade = Math.min(item.clipDuration, nextItem.clipDuration);
+      let moved = false;
 
       const onMove = (ev) => {
+        if (Math.abs(ev.clientX - startX) > 3) moved = true;
         const dxSec = (ev.clientX - startX) / PX_PER_SEC;
         let newVal = startCrossfade - dxSec; // drag left = more overlap, right = less
         newVal = Math.max(0, Math.min(maxCrossfade, newVal));
@@ -905,11 +917,28 @@
       const onUp = () => {
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
-        renderTimeline();
-        markDirty();
+        if (moved) {
+          renderTimeline();
+          markDirty();
+        } else if (state.clipboard) {
+          const idx = state.tracks.findIndex(t => t.id === insertBeforeTrackId);
+          pasteClipboardAt(idx === -1 ? state.tracks.length : idx);
+        }
       };
       window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerup', onUp);
+    });
+  }
+
+  // 타임라인 맨 앞의 삽입 지점: 드래그는 없고, 복사해둔 구간이 있을 때 클릭하면 맨 앞에 붙여넣기.
+  function makePasteOnlyHandle(handle, insertIndex) {
+    handle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!state.clipboard) {
+        setStatus('먼저 곡 목록에서 "복사" 버튼으로 구간을 복사하세요');
+        return;
+      }
+      pasteClipboardAt(insertIndex);
     });
   }
 
