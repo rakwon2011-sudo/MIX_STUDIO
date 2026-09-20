@@ -9,6 +9,8 @@
     audioCtx: null,
     activeSources: [],
     videoFile: null,
+    trackPreviewSource: null,
+    trackPreviewBtn: null,
   };
 
   let nextId = 1;
@@ -233,7 +235,9 @@
     const row = node.querySelector('.track-row');
     row.dataset.id = track.id;
 
-    row.querySelector('.track-name').textContent = track.name;
+    const nameInput = row.querySelector('.track-name');
+    nameInput.value = track.name;
+    nameInput.addEventListener('input', () => { track.name = nameInput.value; });
     row.querySelector('.track-bpm').textContent = track.bpm ? `BPM ${track.bpm.toFixed(1)}` : 'BPM 분석 중...';
 
     const canvas = row.querySelector('.waveform');
@@ -335,6 +339,30 @@
 
     row.querySelector('.move-up').addEventListener('click', () => moveTrack(track.id, -1));
     row.querySelector('.move-down').addEventListener('click', () => moveTrack(track.id, 1));
+
+    const playTrackBtn = row.querySelector('.btn-play-track');
+    playTrackBtn.addEventListener('click', async () => {
+      if (state.trackPreviewBtn === playTrackBtn) {
+        stopTrackPreview();
+        return;
+      }
+      const ctx = getAudioCtx();
+      await ctx.resume();
+      stopPreview();
+      stopTrackPreview();
+      const clipDuration = track.end - track.start;
+      const item = { track, clipDuration };
+      const src = scheduleTrack(ctx, ctx.destination, item, ctx.currentTime + 0.05);
+      state.trackPreviewSource = src;
+      state.trackPreviewBtn = playTrackBtn;
+      playTrackBtn.textContent = '■';
+      playTrackBtn.classList.add('playing');
+      setStatus(`${track.name} 미리듣기 중...`);
+      const endTimer = setTimeout(() => {
+        if (state.trackPreviewBtn === playTrackBtn) stopTrackPreview();
+      }, clipDuration * 1000 + 150);
+      src._endTimer = endTimer;
+    });
 
     trackList.appendChild(row);
     requestAnimationFrame(positionHandles);
@@ -458,6 +486,7 @@
     const ctx = getAudioCtx();
     await ctx.resume();
     stopPreview();
+    stopTrackPreview();
     const { items, totalDuration } = computeTimeline();
     if (items.length === 0) return;
 
@@ -493,6 +522,19 @@
     playBtn.disabled = state.tracks.length === 0;
     stopBtn.disabled = true;
     setStatus('정지됨');
+  }
+
+  function stopTrackPreview() {
+    if (state.trackPreviewSource) {
+      clearTimeout(state.trackPreviewSource._endTimer);
+      try { state.trackPreviewSource.stop(); } catch (e) {}
+      state.trackPreviewSource = null;
+    }
+    if (state.trackPreviewBtn) {
+      state.trackPreviewBtn.textContent = '▶';
+      state.trackPreviewBtn.classList.remove('playing');
+      state.trackPreviewBtn = null;
+    }
   }
 
   // ---------- Export to WAV ----------

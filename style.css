@@ -132,9 +132,46 @@ main {
 .track-name {
   font-weight: 600;
   flex: 1;
+  min-width: 60px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text);
+  font-size: 14px;
+  border-radius: 6px;
+  padding: 3px 6px;
+}
+
+.track-name:hover {
+  border-color: var(--border);
+}
+
+.track-name:focus {
+  outline: none;
+  border-color: var(--accent-2);
+  background: var(--panel-2);
+}
+
+.btn-play-track {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--ok);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+
+.btn-play-track:hover {
+  border-color: var(--ok);
+}
+
+.btn-play-track.playing {
+  background: var(--ok);
+  color: #06210f;
+  border-color: var(--ok);
 }
 
 .track-bpm {
